@@ -19,23 +19,49 @@ const DEFAULT_VIDEO_URL =
 const PORT = Number(process.env.PORT) || 5000;
 const HOST = process.env.HOST || "0.0.0.0";
 
-// Support both ALLOWED_ORIGINS and CLIENT_URL (single or comma-separated)
-function getAllowedOrigins() {
-  const rawOrigins =
-    process.env.ALLOWED_ORIGINS ||
-    process.env.CLIENT_URL ||
-    "http://localhost:5173";
+const LOCAL_DEV_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:5000",
+  "http://127.0.0.1:5000",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+];
 
-  return rawOrigins
-    .split(",")
+// Support both ALLOWED_ORIGINS and CLIENT_URL (single or comma-separated, with wildcard support),
+// while always preserving local development origins.
+function getAllowedOrigins() {
+  const custom = [process.env.ALLOWED_ORIGINS, process.env.CLIENT_URL]
+    .filter(Boolean)
+    .flatMap((val) => val.split(","))
     .map((origin) => origin.trim().replace(/\/+$/, ""))
     .filter(Boolean);
+
+  return Array.from(new Set([...custom, ...LOCAL_DEV_ORIGINS]));
 }
 
 function isOriginAllowed(origin, allowedList) {
   if (!origin) return true; // Allow non-browser requests, health checks, curl, server-to-server
-  const normalized = origin.trim().replace(/\/+$/, "");
-  return allowedList.includes(normalized);
+  const normalized = origin.trim().replace(/\/+$/, "").toLowerCase();
+
+  return allowedList.some((allowed) => {
+    const target = allowed.trim().replace(/\/+$/, "").toLowerCase();
+    if (target === normalized) return true;
+
+    // Support wildcard subdomains, e.g. "https://*.vercel.app" or "*.vercel.app"
+    if (target.includes("*")) {
+      const regexStr = target
+        .split("*")
+        .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+        .join("[a-z0-9_.-]+");
+      const pattern = new RegExp(`^${regexStr}$`, "i");
+      return pattern.test(normalized);
+    }
+
+    return false;
+  });
 }
 
 const MAX_PARTICIPANTS = 10;
@@ -72,7 +98,8 @@ app.use(
       if (isOriginAllowed(origin, allowed)) {
         callback(null, true);
       } else {
-        callback(new Error(`Origin '${origin}' not allowed by CORS`));
+        console.warn(`[Express CORS Blocked] Origin "${origin}" not in allowed list.`);
+        callback(null, false);
       }
     },
     credentials: true,
@@ -112,13 +139,36 @@ const io = new Server(httpServer, {
       if (isOriginAllowed(origin, allowed)) {
         callback(null, true);
       } else {
+        console.warn(
+          `[Socket.IO CORS Blocked] Handshake origin "${origin}" not allowed. Allowed origins:`,
+          allowed
+        );
         callback(new Error(`Origin '${origin}' not allowed by CORS`));
       }
     },
     methods: ["GET", "POST"],
     credentials: true,
   },
-  transports: ["websocket", "polling"],
+  // Default to HTTP polling first, then upgrade to WebSocket for reliable proxy handling
+  transports: ["polling", "websocket"],
+});
+
+// Safe diagnostic logging for Socket.IO connection and handshake errors
+io.engine.on("connection_error", (err) => {
+  const origin = err.req?.headers?.origin || "none";
+  const ip =
+    err.req?.headers?.["x-forwarded-for"] ||
+    err.req?.socket?.remoteAddress ||
+    "unknown";
+  const transport = err.req?._query?.transport || "unknown";
+  const url = err.req?.url || "unknown";
+
+  console.warn(
+    `[Socket.IO Handshake Failure] Code: ${err.code} (${err.message}) | Transport: ${transport} | Origin: ${origin} | IP: ${ip} | URL: ${url}`
+  );
+  if (err.context && Object.keys(err.context).length > 0) {
+    console.warn(`[Socket.IO Error Context]:`, JSON.stringify(err.context));
+  }
 });
 
 // --------------------------------------------------
@@ -1406,16 +1456,17 @@ async function startServer() {
       throw new Error("Failed to connect to MongoDB Atlas after 3 attempts.");
     }
 
+    const logServerStart = () => {
+      const hostDisplay = process.env.HOST ? `http://${process.env.HOST}:${PORT}` : `port ${PORT}`;
+      console.log(`Watch Party API running on ${hostDisplay}`);
+      console.log(`Allowed CORS origins: ${getAllowedOrigins().join(", ")}`);
+      console.log(`Socket.IO transports enabled: ${io.engine.opts.transports.join(", ")}`);
+    };
+
     if (process.env.HOST) {
-      httpServer.listen(PORT, process.env.HOST, () => {
-        console.log(`Watch Party API running on http://${process.env.HOST}:${PORT}`);
-        console.log(`Allowed frontend origins: ${getAllowedOrigins().join(", ")}`);
-      });
+      httpServer.listen(PORT, process.env.HOST, logServerStart);
     } else {
-      httpServer.listen(PORT, () => {
-        console.log(`Watch Party API running on port ${PORT}`);
-        console.log(`Allowed frontend origins: ${getAllowedOrigins().join(", ")}`);
-      });
+      httpServer.listen(PORT, logServerStart);
     }
   } catch (error) {
     console.error("Startup failed:", error.message);

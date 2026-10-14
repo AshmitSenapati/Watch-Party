@@ -110,13 +110,17 @@ Render needs permission to connect to your MongoDB Atlas cluster from the cloud.
 
 Now that you have your public Vercel URL, update Render's allowed origins so your Vercel frontend can make API and Socket.IO requests:
 
-1. Return to the **Render Dashboard** > Select `watch-party-backend`.
-2. Go to **Environment** tab.
+1. Return to the **Render Dashboard** > Select your backend service.
+2. Go to the **Environment** tab.
 3. Update `ALLOWED_ORIGINS` and `CLIENT_URL`:
-   - `ALLOWED_ORIGINS`: `http://localhost:5173,https://your-watch-party.vercel.app`
+   - `ALLOWED_ORIGINS`: `https://your-watch-party.vercel.app,https://*.vercel.app,http://localhost:5173`
    - `CLIENT_URL`: `https://your-watch-party.vercel.app`
-   *(Replace with your actual Vercel domain)*
-4. Click **Save Changes**. Render will automatically re-deploy with the new CORS permissions.
+   *(Replace `your-watch-party.vercel.app` with your actual Vercel domain. Adding `https://*.vercel.app` ensures that preview deployments from branches or pull requests can also connect without CORS errors).*
+4. Click **Save Changes**. Render will automatically re-deploy with the updated CORS permissions.
+
+> [!NOTE]
+> **Socket.IO Transport & Proxy Architecture:**
+> The app is configured with standard `transports: ["polling", "websocket"]`. The browser initiates a fast HTTP long-polling handshake first, then seamlessly upgrades to a secure WebSocket (`wss://`) connection. This guarantees compatibility with hosting proxies (like Render and Cloudflare) that may drop or reject direct WebSocket handshakes (`400 Bad Request`). Diagnostic logs are output to Render logs and browser console to aid troubleshooting.
 
 ---
 

@@ -49,7 +49,7 @@ function App() {
       reconnection: true,
       reconnectionAttempts: 15,
       reconnectionDelay: 1000,
-      transports: ["websocket", "polling"],
+      transports: ["polling", "websocket"],
     });
 
     socketRef.current = s;
@@ -58,6 +58,12 @@ function App() {
       setSocket(s);
       setConnectionStatus("connected");
       setSocketId(s.id);
+      console.log(`[Socket.IO Client] Connected with ID: ${s.id} (Transport: ${s.io?.engine?.transport?.name})`);
+
+      // Log when transport upgrades to WebSocket
+      s.io?.engine?.on("upgrade", (transport) => {
+        console.log(`[Socket.IO Client] Upgraded transport to: ${transport.name}`);
+      });
 
       // Automatic state restoration on reconnection
       if (currentRoomCodeRef.current && currentUsernameRef.current) {
@@ -77,20 +83,29 @@ function App() {
       }
     });
 
-    s.on("disconnect", () => {
-      setConnectionStatus("disconnected");
-    });
-
-    s.io.on("reconnect_attempt", () => {
+    s.on("connect_error", (err) => {
+      console.warn("[Socket.IO Client] Connection error:", err.message);
       setConnectionStatus("reconnecting");
     });
 
-    s.io.on("reconnect", () => {
+    s.on("disconnect", (reason) => {
+      console.log("[Socket.IO Client] Disconnected:", reason);
+      setConnectionStatus("disconnected");
+    });
+
+    s.io.on("reconnect_attempt", (attempt) => {
+      console.log(`[Socket.IO Client] Reconnection attempt #${attempt}`);
+      setConnectionStatus("reconnecting");
+    });
+
+    s.io.on("reconnect", (attempt) => {
+      console.log(`[Socket.IO Client] Reconnected after ${attempt} attempts`);
       setConnectionStatus("connected");
       setSocketId(s.id);
     });
 
-    s.io.on("reconnect_error", () => {
+    s.io.on("reconnect_error", (err) => {
+      console.warn("[Socket.IO Client] Reconnection error:", err.message);
       setConnectionStatus("reconnecting");
     });
 
