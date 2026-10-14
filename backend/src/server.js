@@ -17,7 +17,26 @@ const DEFAULT_VIDEO_URL =
   "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4";
 
 const PORT = Number(process.env.PORT) || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:5173";
+const HOST = process.env.HOST || "0.0.0.0";
+
+// Support both ALLOWED_ORIGINS and CLIENT_URL (single or comma-separated)
+function getAllowedOrigins() {
+  const rawOrigins =
+    process.env.ALLOWED_ORIGINS ||
+    process.env.CLIENT_URL ||
+    "http://localhost:5173";
+
+  return rawOrigins
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/+$/, ""))
+    .filter(Boolean);
+}
+
+function isOriginAllowed(origin, allowedList) {
+  if (!origin) return true; // Allow non-browser requests, health checks, curl, server-to-server
+  const normalized = origin.trim().replace(/\/+$/, "");
+  return allowedList.includes(normalized);
+}
 
 const MAX_PARTICIPANTS = 10;
 const ROOM_CODE_LENGTH = 6;
@@ -43,26 +62,63 @@ const roomCleanupTimers = new Map();
 const chatRateLimits = new Map();
 const reactionRateLimits = new Map();
 
-app.use(cors({ origin: CLIENT_URL }));
+// Trust reverse proxy (crucial when deployed on Render or behind load balancers)
+app.set("trust proxy", 1);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      const allowed = getAllowedOrigins();
+      if (isOriginAllowed(origin, allowed)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin '${origin}' not allowed by CORS`));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    success: true,
+// Health check endpoints for deployment monitoring (e.g. Render health checks)
+function healthCheckHandler(req, res) {
+  const dbState = mongoose.connection.readyState;
+  const dbStatus =
+    dbState === 1
+      ? "connected"
+      : dbState === 2
+      ? "connecting"
+      : "disconnected";
+
+  const isHealthy = dbState === 1;
+
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? "ok" : "degraded",
     message: "Watch Party backend is running",
-    database:
-      mongoose.connection.readyState === 1
-        ? "connected"
-        : "disconnected",
+    database: dbStatus,
     activeRooms: activeRooms.size,
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
   });
-});
+}
+
+app.get("/health", healthCheckHandler);
+app.get("/api/health", healthCheckHandler);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: CLIENT_URL,
+    origin: (origin, callback) => {
+      const allowed = getAllowedOrigins();
+      if (isOriginAllowed(origin, allowed)) {
+        callback(null, true);
+      } else {
+        callback(new Error(`Origin '${origin}' not allowed by CORS`));
+      }
+    },
     methods: ["GET", "POST"],
+    credentials: true,
   },
+  transports: ["websocket", "polling"],
 });
 
 // --------------------------------------------------
@@ -1329,14 +1385,38 @@ async function startServer() {
       throw new Error("MONGODB_URI is missing from backend/.env");
     }
 
-    await mongoose.connect(process.env.MONGODB_URI);
+    let connected = false;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await mongoose.connect(process.env.MONGODB_URI, {
+          serverSelectionTimeoutMS: 5000,
+        });
+        connected = true;
+        console.log("MongoDB connected");
+        break;
+      } catch (err) {
+        console.warn(`MongoDB connection attempt ${attempt} failed: ${err.message}`);
+        if (attempt < 3) {
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      }
+    }
 
-    console.log("MongoDB connected");
+    if (!connected) {
+      throw new Error("Failed to connect to MongoDB Atlas after 3 attempts.");
+    }
 
-    httpServer.listen(PORT, () => {
-      console.log(`Watch Party API: http://localhost:${PORT}`);
-      console.log(`Allowed frontend: ${CLIENT_URL}`);
-    });
+    if (process.env.HOST) {
+      httpServer.listen(PORT, process.env.HOST, () => {
+        console.log(`Watch Party API running on http://${process.env.HOST}:${PORT}`);
+        console.log(`Allowed frontend origins: ${getAllowedOrigins().join(", ")}`);
+      });
+    } else {
+      httpServer.listen(PORT, () => {
+        console.log(`Watch Party API running on port ${PORT}`);
+        console.log(`Allowed frontend origins: ${getAllowedOrigins().join(", ")}`);
+      });
+    }
   } catch (error) {
     console.error("Startup failed:", error.message);
     process.exit(1);

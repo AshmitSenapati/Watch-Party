@@ -17,8 +17,28 @@ async function runTests() {
     stdio: "inherit",
   });
 
-  // Wait for server to connect to MongoDB and listen
-  await delay(2500);
+  // Poll server health endpoint until healthy
+  let serverReady = false;
+  for (let i = 0; i < 25; i++) {
+    await delay(500);
+    try {
+      const res = await fetch("http://localhost:5000/health");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.status === "ok" && data.database === "connected") {
+          serverReady = true;
+          console.log("Server health check passed! Starting tests...");
+          break;
+        }
+      }
+    } catch {
+      // server still starting up
+    }
+  }
+
+  if (!serverReady) {
+    throw new Error("Backend server did not become ready within timeout.");
+  }
 
   let hostSocket = null;
   let viewerSocket = null;
@@ -321,7 +341,13 @@ async function runTests() {
   } finally {
     if (hostSocket) hostSocket.disconnect();
     if (viewerSocket) viewerSocket.disconnect();
-    serverProcess.kill("SIGTERM");
+    if (serverProcess && serverProcess.pid) {
+      if (process.platform === "win32") {
+        spawn("taskkill", ["/pid", serverProcess.pid.toString(), "/T", "/F"]);
+      } else {
+        serverProcess.kill("SIGTERM");
+      }
+    }
     await delay(500);
   }
 }

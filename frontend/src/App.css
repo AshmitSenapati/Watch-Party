@@ -256,6 +256,18 @@ button:disabled {
   border: 1px solid #634b1c;
 }
 
+.invite-banner {
+  color: #d8cbff;
+  background: #221a36;
+  border: 1px solid #544180;
+  font-size: 14px;
+}
+
+.invite-banner strong {
+  color: #fff;
+  letter-spacing: 1px;
+}
+
 /* Room Experience & Layout */
 .room-experience {
   margin-top: 14px;

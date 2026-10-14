@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: watch-party-backend
+    env: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: HOST
+        value: 0.0.0.0
+      - key: CLIENT_URL
+        value: http://localhost:5173
+      - key: ALLOWED_ORIGINS
+        value: http://localhost:5173,https://your-watch-party.vercel.app
+      - key: MONGODB_URI
+        sync: false

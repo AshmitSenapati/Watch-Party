@@ -6,7 +6,9 @@ import ChatPanel from "./components/ChatPanel";
 import PlaylistPanel from "./components/PlaylistPanel";
 import PollPanel from "./components/PollPanel";
 
-const API_URL = "http://localhost:5000";
+const API_URL =
+  (import.meta.env.VITE_SERVER_URL || "").trim().replace(/\/+$/, "") ||
+  "http://localhost:5000";
 
 function App() {
   const socketRef = useRef(null);
@@ -17,7 +19,8 @@ function App() {
   const [socketId, setSocketId] = useState("");
   const [connectionStatus, setConnectionStatus] = useState("connecting");
   const [username, setUsername] = useState("");
-  const [roomCodeInput, setRoomCodeInput] = useState(() => {
+
+  const [invitedRoomCode] = useState(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const inviteCode = params.get("room");
@@ -29,6 +32,8 @@ function App() {
     }
     return "";
   });
+
+  const [roomCodeInput, setRoomCodeInput] = useState(() => invitedRoomCode);
 
   const [room, setRoom] = useState(null);
   const [error, setError] = useState("");
@@ -42,8 +47,9 @@ function App() {
   useEffect(() => {
     const s = io(API_URL, {
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 15,
       reconnectionDelay: 1000,
+      transports: ["websocket", "polling"],
     });
 
     socketRef.current = s;
@@ -226,14 +232,14 @@ function App() {
   async function copyInvite() {
     if (!room) return;
 
-    const inviteUrl = new URL(window.location.href);
+    const inviteUrl = new URL(window.location.origin);
     inviteUrl.searchParams.set("room", room.roomCode);
 
     try {
       await navigator.clipboard.writeText(inviteUrl.toString());
-      setNotice("Invite link copied to clipboard!");
+      setNotice(`Invite link copied to clipboard: ${inviteUrl.toString()}`);
     } catch {
-      setNotice(`Share this room code: ${room.roomCode}`);
+      setNotice(`Share this link to invite friends: ${inviteUrl.toString()}`);
     }
   }
 
@@ -277,6 +283,12 @@ function App() {
             shared playlists, and real-time polls.
           </p>
         </section>
+      )}
+
+      {invitedRoomCode && !room && (
+        <div className="message invite-banner" role="status">
+          🎉 You were invited to join room <strong>{invitedRoomCode}</strong>! Choose your username and click Join Room below.
+        </div>
       )}
 
       {error && (
