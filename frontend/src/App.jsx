@@ -6,9 +6,15 @@ import ChatPanel from "./components/ChatPanel";
 import PlaylistPanel from "./components/PlaylistPanel";
 import PollPanel from "./components/PollPanel";
 
-const API_URL =
-  (import.meta.env.VITE_SERVER_URL || "").trim().replace(/\/+$/, "") ||
-  "http://localhost:5000";
+function getBackendUrl() {
+  const envUrl = (import.meta.env.VITE_SERVER_URL || "").trim();
+  if (!envUrl) return "http://localhost:5000";
+
+  // Strip trailing slashes and any accidental /socket.io path suffix
+  return envUrl.replace(/\/+$/, "").replace(/\/socket\.io\/?$/, "");
+}
+
+const API_URL = getBackendUrl();
 
 function App() {
   const socketRef = useRef(null);

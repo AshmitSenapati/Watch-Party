@@ -19,6 +19,10 @@ const DEFAULT_VIDEO_URL =
 const PORT = Number(process.env.PORT) || 5000;
 const HOST = process.env.HOST || "0.0.0.0";
 
+const KNOWN_PRODUCTION_ORIGINS = [
+  "https://watch-party-rlope6gvr-ash-c968.vercel.app",
+];
+
 const LOCAL_DEV_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -31,7 +35,7 @@ const LOCAL_DEV_ORIGINS = [
 ];
 
 // Support both ALLOWED_ORIGINS and CLIENT_URL (single or comma-separated, with wildcard support),
-// while always preserving local development origins.
+// while always preserving production and local development origins.
 function getAllowedOrigins() {
   const custom = [process.env.ALLOWED_ORIGINS, process.env.CLIENT_URL]
     .filter(Boolean)
@@ -39,7 +43,14 @@ function getAllowedOrigins() {
     .map((origin) => origin.trim().replace(/\/+$/, ""))
     .filter(Boolean);
 
-  return Array.from(new Set([...custom, ...LOCAL_DEV_ORIGINS]));
+  return Array.from(
+    new Set([
+      ...custom,
+      ...KNOWN_PRODUCTION_ORIGINS,
+      "https://*.vercel.app",
+      ...LOCAL_DEV_ORIGINS,
+    ])
+  );
 }
 
 function isOriginAllowed(origin, allowedList) {
@@ -136,14 +147,16 @@ const io = new Server(httpServer, {
   cors: {
     origin: (origin, callback) => {
       const allowed = getAllowedOrigins();
-      if (isOriginAllowed(origin, allowed)) {
+      const isAllowed = isOriginAllowed(origin, allowed);
+      if (isAllowed) {
         callback(null, true);
       } else {
         console.warn(
-          `[Socket.IO CORS Blocked] Handshake origin "${origin}" not allowed. Allowed origins:`,
+          `[Socket.IO CORS Blocked] Origin "${origin}" rejected. Allowed origins:`,
           allowed
         );
-        callback(new Error(`Origin '${origin}' not allowed by CORS`));
+        // Using callback(null, false) allows CORS to omit the header without throwing a MIDDLEWARE_FAILURE error in Engine.IO
+        callback(null, false);
       }
     },
     methods: ["GET", "POST"],
@@ -168,6 +181,11 @@ io.engine.on("connection_error", (err) => {
   );
   if (err.context && Object.keys(err.context).length > 0) {
     console.warn(`[Socket.IO Error Context]:`, JSON.stringify(err.context));
+    if (err.context.name === "MIDDLEWARE_FAILURE") {
+      console.warn(
+        `[Diagnostic] MIDDLEWARE_FAILURE indicates an Engine.IO middleware rejected the request. Verify origin "${origin}" is in allowed list.`
+      );
+    }
   }
 });
 
@@ -1460,6 +1478,7 @@ async function startServer() {
       const hostDisplay = process.env.HOST ? `http://${process.env.HOST}:${PORT}` : `port ${PORT}`;
       console.log(`Watch Party API running on ${hostDisplay}`);
       console.log(`Allowed CORS origins: ${getAllowedOrigins().join(", ")}`);
+      console.log(`Socket.IO initialized on path: ${io.path()}`);
       console.log(`Socket.IO transports enabled: ${io.engine.opts.transports.join(", ")}`);
     };
 
