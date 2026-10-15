@@ -96,6 +96,19 @@
   border-radius: 9px;
   font-weight: 700;
   cursor: pointer;
+  background: #171622;
+  color: #f6f5fb;
+  transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.15s ease, filter 0.2s ease;
+}
+
+.player-button:hover:not(:disabled) {
+  filter: brightness(1.15);
+  border-color: #4e4a63;
+  transform: translateY(-1px);
+}
+
+.player-button:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .player-button.primary {
@@ -104,9 +117,15 @@
   color: #171025;
 }
 
+.player-button.primary:hover:not(:disabled) {
+  background: #cbb8ff;
+  border-color: #cbb8ff;
+}
+
 .player-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  transform: none;
 }
 
 .playback-status {
@@ -179,25 +198,44 @@
   flex: 1;
   min-width: 0;
   padding: 11px 12px;
-  border: 1px solid #444;
+  border: 1px solid #393747;
   border-radius: 8px;
-  background: #101010;
+  background: #0b0b12;
   color: #fff;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.video-url-controls input:focus {
+  border-color: #b9a3ff;
+  box-shadow: 0 0 0 3px rgba(185, 163, 255, 0.18);
 }
 
 .video-url-controls button {
   padding: 10px 16px;
   border: none;
   border-radius: 8px;
-  background: #6366f1;
-  color: white;
-  font-weight: 600;
+  background: #b9a3ff;
+  color: #171025;
+  font-weight: 700;
   cursor: pointer;
+  transition: background-color 0.2s ease, transform 0.15s ease, filter 0.2s ease;
+}
+
+.video-url-controls button:hover:not(:disabled) {
+  background: #cbb8ff;
+  transform: translateY(-1px);
+}
+
+.video-url-controls button:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .video-url-controls button:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
+  transform: none;
 }
 
 .video-url-form p {

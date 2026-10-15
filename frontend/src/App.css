@@ -24,9 +24,12 @@ button, input, textarea, a {
 }
 
 .app {
-  width: min(100% - 40px, 1260px);
-  margin: auto;
-  padding-bottom: 30px;
+  width: min(100% - 48px, 1200px);
+  margin: 0 auto;
+  padding-bottom: 40px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
 }
 
 .navbar {
@@ -47,6 +50,12 @@ button, input, textarea, a {
   font-size: 21px;
   font-weight: 700;
   text-decoration: none;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.brand:hover {
+  opacity: 0.9;
 }
 
 .brand-icon {
@@ -57,6 +66,11 @@ button, input, textarea, a {
   border-radius: 12px;
   background: #b9a3ff;
   color: #171025;
+  transition: transform 0.2s ease;
+}
+
+.brand:hover .brand-icon {
+  transform: scale(1.05);
 }
 
 .connection {
@@ -104,8 +118,10 @@ button, input, textarea, a {
 }
 
 .hero {
-  padding: 55px 0 35px;
-  max-width: 700px;
+  padding: 48px 0 28px;
+  max-width: 720px;
+  margin: 0 auto;
+  text-align: center;
 }
 
 .eyebrow {
@@ -113,14 +129,15 @@ button, input, textarea, a {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 2px;
+  margin: 0 0 14px;
 }
 
 h1 {
   font-family: "Space Grotesk", sans-serif;
-  font-size: clamp(40px, 6vw, 64px);
-  line-height: 1.06;
-  letter-spacing: -2.5px;
-  margin: 18px 0;
+  font-size: clamp(38px, 5.5vw, 62px);
+  line-height: 1.08;
+  letter-spacing: -2px;
+  margin: 0 0 18px;
 }
 
 h1 span {
@@ -128,24 +145,34 @@ h1 span {
 }
 
 .description {
-  max-width: 570px;
+  max-width: 580px;
+  margin: 0 auto;
   color: #aaa8b8;
-  line-height: 1.8;
-  font-size: 14px;
+  line-height: 1.75;
+  font-size: 15px;
 }
 
 .room-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  margin-top: 20px;
+  gap: 24px;
+  margin-top: 24px;
+  align-items: stretch;
 }
 
 .action-card {
-  padding: 25px;
+  display: flex;
+  flex-direction: column;
+  padding: 28px 24px;
   background: #12121c;
   border: 1px solid #292837;
   border-radius: 18px;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+.action-card:hover {
+  border-color: #3e3a54;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
 }
 
 .card-icon {
@@ -158,62 +185,93 @@ h1 span {
   border-radius: 12px;
   font-size: 13px;
   font-weight: 700;
+  margin-bottom: 4px;
+  transition: transform 0.2s ease;
+}
+
+.action-card:hover .card-icon {
+  transform: scale(1.06);
 }
 
 .action-card h2 {
-  margin: 18px 0 8px;
+  margin: 14px 0 6px;
   font-family: "Space Grotesk", sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: #f6f5fb;
+  text-align: center;
 }
 
 .action-card > p {
   color: #aaa8b8;
   font-size: 13px;
-  line-height: 1.6;
-  min-height: 40px;
+  line-height: 1.55;
+  margin: 0 0 16px;
+  min-height: 38px;
+  text-align: center;
 }
 
 .action-card label {
   display: block;
-  margin: 18px 0 8px;
+  margin: 14px 0 8px;
   color: #d8d5e4;
   font-size: 13px;
   font-weight: 600;
+  text-align: center;
 }
 
 .action-card input {
   display: block;
   width: 100%;
-  padding: 12px 13px;
+  padding: 12px 14px;
   border: 1px solid #393747;
   border-radius: 10px;
   outline: none;
   background: #0b0b12;
   color: white;
+  font-size: 14px;
+  cursor: text;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .action-card input:focus {
   border-color: #b9a3ff;
-  box-shadow: 0 0 0 3px #b9a3ff20;
+  box-shadow: 0 0 0 3px rgba(185, 163, 255, 0.18);
 }
 
 .primary-button, .secondary-button {
-  padding: 11px 16px;
+  padding: 12px 18px;
   border-radius: 10px;
   cursor: pointer;
   font-weight: 700;
   font-size: 13px;
-  transition: filter 0.2s, background 0.2s, border-color 0.2s;
+  letter-spacing: 0.2px;
+  transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease, filter 0.2s ease;
 }
 
 .action-card > button {
   width: 100%;
-  margin-top: 22px;
+  margin-top: auto;
+  margin-bottom: 0;
 }
 
 .primary-button {
   color: #171025;
   background: #b9a3ff;
   border: 1px solid #b9a3ff;
+  box-shadow: 0 2px 8px rgba(185, 163, 255, 0.2);
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #cbb8ff;
+  border-color: #cbb8ff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 16px rgba(185, 163, 255, 0.35);
+}
+
+.primary-button:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 2px 6px rgba(185, 163, 255, 0.2);
 }
 
 .secondary-button {
@@ -222,13 +280,24 @@ h1 span {
   border: 1px solid #393747;
 }
 
-button:hover:not(:disabled) {
-  filter: brightness(1.12);
+.secondary-button:hover:not(:disabled) {
+  background: #232230;
+  border-color: #4e4b5f;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+
+.secondary-button:active:not(:disabled) {
+  transform: translateY(0);
+  background: #1a1924;
 }
 
 button:disabled {
-  opacity: 0.55;
+  opacity: 0.5;
   cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 .message {
@@ -511,28 +580,42 @@ footer {
   .room-layout-grid {
     grid-template-columns: 1fr;
   }
+
+  .hero {
+    padding: 38px 0 24px;
+  }
 }
 
 @media (max-width: 680px) {
   .app {
-    width: min(100% - 24px, 1260px);
+    width: min(100% - 32px, 1200px);
   }
 
   .room-actions {
     grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .action-card {
+    padding: 22px 18px;
+  }
+
+  .action-card input {
+    font-size: 16px; /* Prevents auto-zoom on iOS */
   }
 
   .hero {
-    padding-top: 36px;
+    padding: 30px 0 20px;
   }
 
   h1 {
-    letter-spacing: -2px;
+    letter-spacing: -1.5px;
   }
 
   .room-top-bar {
     flex-direction: column;
     align-items: flex-start;
+    gap: 12px;
   }
 
   .room-actions-inline {
@@ -541,5 +624,10 @@ footer {
 
   .room-actions-inline button {
     flex: 1;
+    min-height: 42px;
+  }
+
+  .primary-button, .secondary-button {
+    min-height: 44px;
   }
 }
