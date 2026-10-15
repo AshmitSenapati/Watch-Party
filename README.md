@@ -1,4 +1,4 @@
-# 🎬 Watch Party
+<img width="1236" height="288" alt="image" src="https://github.com/user-attachments/assets/f2b49d31-f41f-4de2-a6ed-7d48b10a4602" /># 🎬 Watch Party
 
 > A real-time, synchronized video watching platform built with **React**, **Node.js**, **Express**, **Socket.IO**, and **MongoDB**. Watch videos together with friends across rooms with synchronized playback, live chat, interactive emoji reactions, collaborative playlists, and real-time polls.
 
@@ -407,10 +407,11 @@ Watch Party is pre-configured and deployed to the public internet so users on di
 ### Active Deployment Architecture
 
 - **Frontend Application**: Deployed on **Vercel**
-  - **Live URL**: `https://watch-party-rlope6gvr-ash-c968.vercel.app`
+  - **Live URL**: `https://watch-party-omega-two.vercel.app`
   - Served as a globally distributed Single-Page Application (SPA) with automated build optimization.
 - **Backend Service**: Deployed on **Render**
   - **Live URL**: `https://watch-party-p7ix.onrender.com`
+  - For checking if backend is running, add /health after the url.
   - Runs the Node.js/Express HTTP server and Socket.IO real-time engine.
 - **Database**: Cloud **MongoDB Atlas**
   - High-availability cluster storing room metadata.
@@ -425,7 +426,7 @@ Watch Party is pre-configured and deployed to the public internet so users on di
 ### How to Use the Live Deployment
 
 1. **Host (Device 1)**:
-   - Open: `https://watch-party-rlope6gvr-ash-c968.vercel.app`
+   - Open: `https://watch-party-omega-two.vercel.app`
    - Wait for the top-right navbar indicator to show **Connected** (green dot).
    - Enter your name (e.g., `HostUser`) and click **Create Room**.
    - Click the **Copy Invite Link** button in the header. The link will be in this format:
