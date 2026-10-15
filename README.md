@@ -1,4 +1,4 @@
-<img width="1236" height="288" alt="image" src="https://github.com/user-attachments/assets/f2b49d31-f41f-4de2-a6ed-7d48b10a4602" /># 🎬 Watch Party
+🎬 Watch Party
 
 > A real-time, synchronized video watching platform built with **React**, **Node.js**, **Express**, **Socket.IO**, and **MongoDB**. Watch videos together with friends across rooms with synchronized playback, live chat, interactive emoji reactions, collaborative playlists, and real-time polls.
 
