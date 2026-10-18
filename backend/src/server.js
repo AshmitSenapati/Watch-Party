@@ -386,6 +386,7 @@ function getPublicRoom(room) {
     currentPlaylistId: room.currentPlaylistId ?? null,
     poll: getPublicPoll(room.poll),
     messages: (room.messages || []).slice(-MAX_CHAT_HISTORY),
+    status: room.status || "active",
   };
 }
 
@@ -414,30 +415,76 @@ async function leaveCurrentRoom(socket, isDisconnect = false) {
 
   if (!room) return;
 
+  const participant = room.participants.get(socket.id);
+  const wasHost = room.hostSocketId === socket.id;
+
   room.participants.delete(socket.id);
 
-  if (room.participants.size === 0) {
-    if (isDisconnect) {
-      // 15-second grace period for disconnections to allow quick reconnection
-      const timer = setTimeout(async () => {
-        roomCleanupTimers.delete(roomCode);
-        const currentRoom = activeRooms.get(roomCode);
-        if (currentRoom && currentRoom.participants.size === 0) {
-          activeRooms.delete(roomCode);
+  if (isDisconnect && participant) {
+    if (!room.disconnectedParticipants) {
+      room.disconnectedParticipants = new Map();
+    }
+
+    const key = participant.username.toLowerCase();
+    if (room.disconnectedParticipants.has(key)) {
+      clearTimeout(room.disconnectedParticipants.get(key).timer);
+    }
+
+    const timer = setTimeout(async () => {
+      if (!room.disconnectedParticipants) return;
+      room.disconnectedParticipants.delete(key);
+
+      // If disconnected participant was host, transfer host to next active participant
+      if (room.hostSocketId === socket.id || !room.participants.has(room.hostSocketId)) {
+        if (room.participants.size > 0) {
+          const nextHost = [...room.participants.values()]
+            .sort((a, b) => a.joinedAt - b.joinedAt)[0];
+          room.hostSocketId = nextHost.id;
+
           if (mongoose.connection.readyState === 1) {
             await Room.updateOne(
               { roomCode },
-              { $set: { status: "ended" } }
+              { $set: { hostUsername: nextHost.username, status: "active" } }
             ).catch(() => {});
           }
-          console.log(`Room ${roomCode} ended after grace period.`);
+          sendRoomUpdate(room);
         }
-      }, 15000);
+      }
 
-      roomCleanupTimers.set(roomCode, timer);
-      return;
+      // If room has no active participants and no pending disconnected participants, end room
+      if (room.participants.size === 0 && room.disconnectedParticipants.size === 0) {
+        activeRooms.delete(roomCode);
+        if (mongoose.connection.readyState === 1) {
+          await Room.updateOne(
+            { roomCode },
+            { $set: { status: "ended" } }
+          ).catch(() => {});
+        }
+        console.log(`Room ${roomCode} ended after disconnect grace period.`);
+      }
+    }, 15000);
+
+    room.disconnectedParticipants.set(key, {
+      username: participant.username,
+      joinedAt: participant.joinedAt,
+      isHost: wasHost,
+      timer,
+    });
+
+    sendRoomUpdate(room);
+    return;
+  }
+
+  // Explicit leave (isDisconnect === false)
+  if (participant && room.disconnectedParticipants) {
+    const key = participant.username.toLowerCase();
+    if (room.disconnectedParticipants.has(key)) {
+      clearTimeout(room.disconnectedParticipants.get(key).timer);
+      room.disconnectedParticipants.delete(key);
     }
+  }
 
+  if (room.participants.size === 0 && (!room.disconnectedParticipants || room.disconnectedParticipants.size === 0)) {
     activeRooms.delete(roomCode);
 
     if (mongoose.connection.readyState === 1) {
@@ -450,23 +497,25 @@ async function leaveCurrentRoom(socket, isDisconnect = false) {
     return;
   }
 
-  // Transfer host privileges to the earliest remaining participant.
-  if (room.hostSocketId === socket.id) {
-    const nextHost = [...room.participants.values()]
-      .sort((a, b) => a.joinedAt - b.joinedAt)[0];
+  // Transfer host privileges immediately if explicit leave
+  if (wasHost) {
+    if (room.participants.size > 0) {
+      const nextHost = [...room.participants.values()]
+        .sort((a, b) => a.joinedAt - b.joinedAt)[0];
 
-    room.hostSocketId = nextHost.id;
+      room.hostSocketId = nextHost.id;
 
-    if (mongoose.connection.readyState === 1) {
-      await Room.updateOne(
-        { roomCode },
-        {
-          $set: {
-            hostUsername: nextHost.username,
-            status: "active",
-          },
-        }
-      ).catch(() => {});
+      if (mongoose.connection.readyState === 1) {
+        await Room.updateOne(
+          { roomCode },
+          {
+            $set: {
+              hostUsername: nextHost.username,
+              status: "active",
+            },
+          }
+        ).catch(() => {});
+      }
     }
   }
 
@@ -616,10 +665,11 @@ io.on("connection", (socket) => {
         });
       }
 
-      const nameTaken = [...room.participants.values()].some(
-        (participant) =>
-          participant.username.toLowerCase() === username.toLowerCase()
-      );
+      const nameTaken =
+        [...room.participants.values()].some(
+          (participant) =>
+            participant.username.toLowerCase() === username.toLowerCase()
+        ) || Boolean(room.disconnectedParticipants?.has(username.toLowerCase()));
 
       if (nameTaken) {
         return reply(ack, {
@@ -683,22 +733,33 @@ io.on("connection", (socket) => {
       // Find if there is an existing participant entry for this username
       let existingSocketId = null;
       let existingJoinedAt = Date.now();
+      let wasHost = false;
 
       for (const [sId, participant] of room.participants.entries()) {
         if (participant.username.toLowerCase() === username.toLowerCase()) {
           existingSocketId = sId;
           existingJoinedAt = participant.joinedAt;
+          if (room.hostSocketId === sId) {
+            wasHost = true;
+          }
           break;
+        }
+      }
+
+      // Also check disconnected participants in grace period
+      if (!existingSocketId && room.disconnectedParticipants?.has(username.toLowerCase())) {
+        const disconnected = room.disconnectedParticipants.get(username.toLowerCase());
+        clearTimeout(disconnected.timer);
+        room.disconnectedParticipants.delete(username.toLowerCase());
+        existingJoinedAt = disconnected.joinedAt;
+        if (disconnected.isHost) {
+          wasHost = true;
         }
       }
 
       if (existingSocketId) {
         room.participants.delete(existingSocketId);
         socketRooms.delete(existingSocketId);
-
-        if (room.hostSocketId === existingSocketId) {
-          room.hostSocketId = socket.id;
-        }
       } else if (room.participants.size >= MAX_PARTICIPANTS) {
         return reply(ack, {
           ok: false,
@@ -712,9 +773,15 @@ io.on("connection", (socket) => {
         joinedAt: existingJoinedAt,
       });
 
-      // Ensure room has a host
-      if (!room.hostSocketId || !room.participants.has(room.hostSocketId)) {
+      // Ensure room has a host or restore previous host role
+      if (wasHost || !room.hostSocketId || !room.participants.has(room.hostSocketId)) {
         room.hostSocketId = socket.id;
+        if (mongoose.connection.readyState === 1) {
+          await Room.updateOne(
+            { roomCode },
+            { $set: { hostUsername: username, status: "active" } }
+          ).catch(() => {});
+        }
       }
 
       socketRooms.set(socket.id, roomCode);

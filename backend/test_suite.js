@@ -452,7 +452,7 @@ async function runTests() {
       });
     });
 
-    // Test 9: Reconnection
+    // Test 9: Reconnection and Page Refresh Simulation
     // Reconnect viewer socket with reconnect_room
     await new Promise((resolve) => {
       viewerSocket.emit("reconnect_room", { roomCode, username: "ViewerUser" }, (res) => {
@@ -462,6 +462,105 @@ async function runTests() {
         resolve();
       });
     });
+
+    // Test 10: Host Browser Refresh Simulation (Disconnect -> New Socket -> Reconnect)
+    console.log("Simulating Host browser refresh (F5)...");
+    hostSocket.disconnect();
+    await delay(300);
+
+    const refreshedHostSocket = io(SERVER_URL, { reconnection: false });
+    await new Promise((resolve) => refreshedHostSocket.on("connect", resolve));
+
+    await new Promise((resolve) => {
+      refreshedHostSocket.emit(
+        "reconnect_room",
+        { roomCode, username: "HostUser" },
+        (res) => {
+          assert(res.ok === true, "Host reconnected with fresh socket after page refresh");
+          assert(res.room.hostUsername === "HostUser", "Host retains hostUsername after refresh");
+          const hostEntry = res.room.participants.find((p) => p.username === "HostUser");
+          assert(Boolean(hostEntry && hostEntry.isHost), "Host participant isHost flag is true");
+          assert(res.room.participants.length === 2, "Participants count strictly 2 (no ghost sockets)");
+          assert(typeof res.room.playback.videoUrl === "string" && res.room.playback.videoUrl.length > 0, "Video URL preserved on refresh");
+          assert(typeof res.room.playback.position === "number", "Playback position preserved on refresh");
+          assert(res.room.poll && res.room.poll.isOpen === false, "Closed poll state preserved on refresh");
+          assert(res.room.messages.length >= 1, "Chat messages preserved on refresh");
+          resolve();
+        }
+      );
+    });
+
+    // Test 11: Reconnect to non-existent or expired room
+    await new Promise((resolve) => {
+      refreshedHostSocket.emit(
+        "reconnect_room",
+        { roomCode: "ZZ99XX", username: "HostUser" },
+        (res) => {
+          assert(res.ok === false, "Reconnect to invalid/expired room is rejected");
+          assert(res.error.length > 0, "Error message provided for expired room");
+          resolve();
+        }
+      );
+    });
+
+    // Test 12: Solo Room Browser Refresh Simulation
+    console.log("Simulating Solo Room browser refresh...");
+    const soloSocket = io(SERVER_URL, { reconnection: false });
+    await new Promise((resolve) => soloSocket.on("connect", resolve));
+
+    let soloRoomCode = null;
+    await new Promise((resolve) => {
+      soloSocket.emit("create_room", { username: "SoloHost" }, (res) => {
+        assert(res.ok === true, "SoloHost created room");
+        soloRoomCode = res.room.roomCode;
+        resolve();
+      });
+    });
+
+    // Solo host disconnects (simulating browser reload while alone)
+    soloSocket.disconnect();
+    await delay(300);
+
+    // Fresh socket loads the page
+    const reloadedSoloSocket = io(SERVER_URL, { reconnection: false });
+    await new Promise((resolve) => reloadedSoloSocket.on("connect", resolve));
+
+    await new Promise((resolve) => {
+      reloadedSoloSocket.emit(
+        "reconnect_room",
+        { roomCode: soloRoomCode, username: "SoloHost" },
+        (res) => {
+          assert(res.ok === true, "SoloHost rejoins room within disconnect grace period");
+          assert(res.room.hostUsername === "SoloHost", "SoloHost is preserved as host");
+          assert(res.room.participants.length === 1, "Participant count is exactly 1");
+          assert(res.room.participants[0].isHost === true, "SoloHost is marked as host");
+          resolve();
+        }
+      );
+    });
+
+    // Test 13: Explicit leave_room terminates room immediately without grace period
+    await new Promise((resolve) => {
+      reloadedSoloSocket.emit("leave_room", (res) => {
+        assert(res.ok === true, "SoloHost explicitly leaves room");
+        resolve();
+      });
+    });
+
+    // Attempting to reconnect to explicitly left room fails
+    await new Promise((resolve) => {
+      reloadedSoloSocket.emit(
+        "reconnect_room",
+        { roomCode: soloRoomCode, username: "SoloHost" },
+        (res) => {
+          assert(res.ok === false, "Cannot reconnect to explicitly ended room");
+          resolve();
+        }
+      );
+    });
+
+    refreshedHostSocket.disconnect();
+    reloadedSoloSocket.disconnect();
 
     console.log(`\nAll ${passedCount}/${totalCount} Automated End-to-End Tests Passed Successfully!`);
   } finally {

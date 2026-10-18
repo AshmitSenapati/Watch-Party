@@ -569,6 +569,62 @@ button:disabled {
   letter-spacing: 1px;
 }
 
+/* Reconnecting Session Card */
+.room-reconnecting-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 56px 28px;
+  margin: 48px auto;
+  max-width: 500px;
+  background: #141320;
+  border: 1px solid #2d2b3d;
+  border-radius: 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.reconnecting-spinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid rgba(185, 163, 255, 0.2);
+  border-top-color: #b9a3ff;
+  border-radius: 50%;
+  animation: spinReconnecting 0.9s linear infinite;
+  margin-bottom: 22px;
+}
+
+@keyframes spinReconnecting {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.room-reconnecting-card h2 {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 21px;
+  margin: 0 0 10px;
+  color: #f6f5fb;
+}
+
+.room-reconnecting-card p {
+  color: #a7a3b8;
+  font-size: 14px;
+  margin: 0 0 24px;
+  line-height: 1.5;
+}
+
+.room-reconnecting-card strong {
+  color: #f6f5fb;
+}
+
+.cancel-reconnect-btn {
+  padding: 10px 20px;
+  font-size: 13px;
+  border-radius: 8px;
+}
+
 footer {
   padding: 40px 0 20px;
   color: #777586;

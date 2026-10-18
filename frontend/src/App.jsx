@@ -15,16 +15,72 @@ function getBackendUrl() {
 }
 
 const API_URL = getBackendUrl();
+const SESSION_STORAGE_KEY = "watch_party_session";
+
+function getStoredSession() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (
+      data &&
+      typeof data.roomCode === "string" &&
+      typeof data.username === "string" &&
+      /^[A-Za-z0-9]{6}$/.test(data.roomCode.trim()) &&
+      data.username.trim().length >= 2 &&
+      data.username.trim().length <= 24
+    ) {
+      return {
+        roomCode: data.roomCode.trim().toUpperCase(),
+        username: data.username.trim(),
+      };
+    }
+  } catch {
+    /* ignore parse error */
+  }
+  return null;
+}
+
+function setStoredSession(roomCode, username) {
+  try {
+    if (roomCode && username) {
+      sessionStorage.setItem(
+        SESSION_STORAGE_KEY,
+        JSON.stringify({
+          roomCode: roomCode.trim().toUpperCase(),
+          username: username.trim(),
+        })
+      );
+    }
+  } catch {
+    /* ignore storage error */
+  }
+}
+
+function clearStoredSession() {
+  try {
+    sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  } catch {
+    /* ignore storage error */
+  }
+}
 
 function App() {
+  const initialSession = getStoredSession();
   const socketRef = useRef(null);
-  const currentRoomCodeRef = useRef(null);
-  const currentUsernameRef = useRef(null);
+  const currentSessionRef = useRef(initialSession);
 
   const [socket, setSocket] = useState(null);
   const [socketId, setSocketId] = useState("");
   const [connectionStatus, setConnectionStatus] = useState("connecting");
-  const [username, setUsername] = useState("");
+  const [isRestoring, setIsRestoring] = useState(() => Boolean(initialSession));
+  const [restoringSession, setRestoringSession] = useState(
+    () => initialSession
+  );
+
+  const [username, setUsername] = useState(
+    () => initialSession?.username || ""
+  );
 
   const [invitedRoomCode] = useState(() => {
     try {
@@ -39,7 +95,9 @@ function App() {
     return "";
   });
 
-  const [roomCodeInput, setRoomCodeInput] = useState(() => invitedRoomCode);
+  const [roomCodeInput, setRoomCodeInput] = useState(
+    () => initialSession?.roomCode || invitedRoomCode
+  );
 
   const [room, setRoom] = useState(null);
   const [error, setError] = useState("");
@@ -71,21 +129,54 @@ function App() {
         console.log(`[Socket.IO Client] Upgraded transport to: ${transport.name}`);
       });
 
-      // Automatic state restoration on reconnection
-      if (currentRoomCodeRef.current && currentUsernameRef.current) {
-        s.emit(
+      // Automatic state restoration on initial load or reconnection
+      const activeSession = currentSessionRef.current;
+      if (activeSession?.roomCode && activeSession?.username) {
+        setIsRestoring(true);
+        s.timeout(7000).emit(
           "reconnect_room",
           {
-            roomCode: currentRoomCodeRef.current,
-            username: currentUsernameRef.current,
+            roomCode: activeSession.roomCode,
+            username: activeSession.username,
           },
-          (response) => {
+          (timeoutError, response) => {
+            setIsRestoring(false);
+            setRestoringSession(null);
+
+            if (timeoutError) {
+              clearStoredSession();
+              currentSessionRef.current = null;
+              setRoom(null);
+              setError("Reconnection timed out. Please try joining again.");
+              return;
+            }
+
             if (response?.ok && response.room) {
               setRoom(response.room);
-              setNotice("Reconnected to room successfully!");
+              currentSessionRef.current = {
+                roomCode: response.room.roomCode,
+                username: activeSession.username,
+              };
+              setStoredSession(response.room.roomCode, activeSession.username);
+              setNotice(
+                `Reconnected to room ${response.room.roomCode} successfully!`
+              );
+              setError("");
+            } else {
+              // Room is invalid or expired
+              clearStoredSession();
+              currentSessionRef.current = null;
+              setRoom(null);
+              setError(
+                response?.error ||
+                  "The room you were in is no longer active. Please create or join a new room."
+              );
             }
           }
         );
+      } else {
+        setIsRestoring(false);
+        setRestoringSession(null);
       }
     });
 
@@ -116,6 +207,14 @@ function App() {
     });
 
     s.on("room_updated", (updatedRoom) => {
+      if (updatedRoom?.status === "ended") {
+        clearStoredSession();
+        currentSessionRef.current = null;
+        setRoom(null);
+        setError("The room has ended because all participants left.");
+        return;
+      }
+
       setRoom((currentRoom) => {
         if (currentRoom?.roomCode === updatedRoom.roomCode) {
           return updatedRoom;
@@ -191,8 +290,11 @@ function App() {
       setRoom(joinedRoom);
 
       if (joinedRoom) {
-        currentRoomCodeRef.current = joinedRoom.roomCode;
-        currentUsernameRef.current = payload.username;
+        currentSessionRef.current = {
+          roomCode: joinedRoom.roomCode,
+          username: payload.username,
+        };
+        setStoredSession(joinedRoom.roomCode, payload.username);
       }
 
       setNotice(
@@ -224,11 +326,23 @@ function App() {
     });
   }
 
+  function cancelReconnect() {
+    clearStoredSession();
+    currentSessionRef.current = null;
+    setIsRestoring(false);
+    setRestoringSession(null);
+    setRoom(null);
+    setNotice("Reconnection cancelled. Returned to lobby.");
+  }
+
   function leaveRoom() {
     const s = socketRef.current;
 
     if (!s?.connected) {
-      setError("Reconnect before leaving the room.");
+      clearStoredSession();
+      currentSessionRef.current = null;
+      setRoom(null);
+      setError("Disconnected from server. Session cleared.");
       return;
     }
 
@@ -243,8 +357,8 @@ function App() {
         setError("Could not leave the room cleanly. Resetting local state.");
       }
 
-      currentRoomCodeRef.current = null;
-      currentUsernameRef.current = null;
+      clearStoredSession();
+      currentSessionRef.current = null;
       setRoom(null);
       setNotice("You left the room.");
     });
@@ -290,7 +404,7 @@ function App() {
         </span>
       </header>
 
-      {!room && (
+      {!room && !isRestoring && (
         <section className="hero">
           <p className="eyebrow">WATCH TOGETHER, ANYWHERE</p>
           <h1>
@@ -306,7 +420,7 @@ function App() {
         </section>
       )}
 
-      {invitedRoomCode && !room && (
+      {invitedRoomCode && !room && !isRestoring && (
         <div className="message invite-banner" role="status">
           🎉 You were invited to join room <strong>{invitedRoomCode}</strong>! Choose your username and click Join Room below.
         </div>
@@ -330,7 +444,23 @@ function App() {
         </div>
       )}
 
-      {!room ? (
+      {isRestoring && !room ? (
+        <section className="room-reconnecting-card" aria-live="polite">
+          <div className="reconnecting-spinner" />
+          <h2>Reconnecting to Room {restoringSession?.roomCode}...</h2>
+          <p>
+            Restoring your watch party session as{" "}
+            <strong>{restoringSession?.username}</strong>.
+          </p>
+          <button
+            type="button"
+            className="secondary-button cancel-reconnect-btn"
+            onClick={cancelReconnect}
+          >
+            Cancel &amp; Return to Lobby
+          </button>
+        </section>
+      ) : !room ? (
         <section className="room-actions">
           <form className="action-card" onSubmit={createRoom}>
             <span className="card-icon">01</span>
