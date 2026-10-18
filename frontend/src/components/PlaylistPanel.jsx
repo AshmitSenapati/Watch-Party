@@ -1,5 +1,6 @@
 import { useState } from "react";
 import "./PlaylistPanel.css";
+import { parseYouTubeVideoId, isYouTubeUrl } from "../utils/youtube";
 
 export default function PlaylistPanel({
   socket,
@@ -24,15 +25,25 @@ export default function PlaylistPanel({
       return;
     }
 
-    try {
-      const parsed = new URL(trimmedUrl);
-      if (!["http:", "https:"].includes(parsed.protocol)) {
-        onError?.("Only HTTP and HTTPS URLs are supported.");
+    if (isYouTubeUrl(trimmedUrl)) {
+      const ytId = parseYouTubeVideoId(trimmedUrl);
+      if (!ytId) {
+        onError?.(
+          "Invalid YouTube URL or unsupported video ID. Supported formats: watch?v=ID, youtu.be/ID, embed/ID, shorts/ID."
+        );
         return;
       }
-    } catch {
-      onError?.("Invalid video URL.");
-      return;
+    } else {
+      try {
+        const parsed = new URL(trimmedUrl);
+        if (!["http:", "https:"].includes(parsed.protocol)) {
+          onError?.("Only HTTP and HTTPS URLs are supported.");
+          return;
+        }
+      } catch {
+        onError?.("Invalid video URL.");
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -94,7 +105,7 @@ export default function PlaylistPanel({
             className="playlist-input"
             value={videoUrl}
             onChange={(e) => setVideoUrl(e.target.value)}
-            placeholder="Video URL (e.g. direct MP4 link)"
+            placeholder="Video URL (YouTube or direct MP4 link)"
             required
             disabled={isSubmitting}
           />

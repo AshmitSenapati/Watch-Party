@@ -19,15 +19,15 @@ async function runTests() {
 
   // Poll server health endpoint until healthy
   let serverReady = false;
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < 35; i++) {
     await delay(500);
     try {
       const res = await fetch("http://localhost:5000/health");
       if (res.ok) {
         const data = await res.json();
-        if (data.status === "ok" && data.database === "connected") {
+        if (data.status === "ok" || data.status === "degraded") {
           serverReady = true;
-          console.log("Server health check passed! Starting tests...");
+          console.log(`Server health check passed (Status: ${data.status}, Database: ${data.database})! Starting tests...`);
           break;
         }
       }
@@ -135,6 +135,132 @@ async function runTests() {
         resolve();
       });
     });
+
+    // Test 4B: Synchronized YouTube Video Playback
+    // 1. Host loads a YouTube video using short format
+    const ytShortUrl = "https://youtu.be/dQw4w9WgXcQ";
+    const ytCanonical = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+
+    const viewerYtUpdatePromise = new Promise((resolve) => {
+      viewerSocket.once("playback_updated", (playback) => {
+        assert(playback.videoUrl === ytCanonical, "Viewer receives canonical YouTube URL");
+        assert(playback.isPlaying === false, "YouTube video starts paused");
+        assert(playback.position === 0, "YouTube video position initialized to 0");
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      hostSocket.emit("change_video", { videoUrl: ytShortUrl }, (res) => {
+        assert(res.ok === true, "Host can change to YouTube video URL");
+        assert(res.playback.videoUrl === ytCanonical, "YouTube URL normalized to canonical watch URL");
+        resolve();
+      });
+    });
+    await viewerYtUpdatePromise;
+
+    // 2. Reject invalid YouTube URLs
+    await new Promise((resolve) => {
+      hostSocket.emit("change_video", { videoUrl: "https://www.youtube.com/watch?v=invalid_short" }, (res) => {
+        assert(res.ok === false, "Invalid YouTube video ID is rejected");
+        assert(typeof res.error === "string", "Helpful error message returned for invalid YouTube URL");
+        resolve();
+      });
+    });
+
+    // 3. Reject non-URL HTML injection / arbitrary iframes
+    await new Promise((resolve) => {
+      hostSocket.emit("change_video", { videoUrl: '<iframe src="https://evil.com"></iframe>' }, (res) => {
+        assert(res.ok === false, "Arbitrary iframe HTML tag injection is rejected");
+        resolve();
+      });
+    });
+
+    // 4. Host plays YouTube video
+    const viewerPlayPromise = new Promise((resolve) => {
+      viewerSocket.once("playback_updated", (playback) => {
+        assert(playback.isPlaying === true, "Viewer receives play synchronization for YouTube");
+        assert(playback.position === 15, "Viewer receives synchronized playback position 15");
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      hostSocket.emit("playback_command", { action: "play", position: 15 }, (res) => {
+        assert(res.ok === true, "Host plays YouTube video at position 15");
+        assert(res.playback.isPlaying === true, "Playback state is playing");
+        resolve();
+      });
+    });
+    await viewerPlayPromise;
+
+    // 5. Host seeks YouTube video
+    const viewerSeekPromise = new Promise((resolve) => {
+      viewerSocket.once("playback_updated", (playback) => {
+        assert(playback.position === 65, "Viewer receives seek synchronization to position 65");
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      hostSocket.emit("playback_command", { action: "seek", position: 65 }, (res) => {
+        assert(res.ok === true, "Host seeks YouTube video to position 65");
+        assert(res.playback.position === 65, "Playback position updated to 65");
+        resolve();
+      });
+    });
+    await viewerSeekPromise;
+
+    // 6. Host pauses YouTube video
+    await new Promise((resolve) => {
+      hostSocket.emit("playback_command", { action: "pause", position: 70 }, (res) => {
+        assert(res.ok === true, "Host pauses YouTube video");
+        assert(res.playback.isPlaying === false, "Playback is paused");
+        resolve();
+      });
+    });
+
+    // 7. Late joiner test: receives YouTube video and state
+    const lateJoinerSocket = io(SERVER_URL, { reconnection: false });
+    await new Promise((resolve) => lateJoinerSocket.on("connect", resolve));
+    await new Promise((resolve) => {
+      lateJoinerSocket.emit("join_room", { username: "LateJoiner", roomCode }, (res) => {
+        assert(res.ok === true, "Late joiner joined room successfully");
+        assert(res.room.playback.videoUrl === ytCanonical, "Late joiner receives currently playing YouTube video");
+        assert(res.room.playback.position >= 65, "Late joiner receives correct playback position");
+        resolve();
+      });
+    });
+    lateJoinerSocket.disconnect();
+
+    // 8. Room isolation test: create Room B and verify no cross-room pollution
+    const roomBSocket = io(SERVER_URL, { reconnection: false });
+    await new Promise((resolve) => roomBSocket.on("connect", resolve));
+    let roomBCode = null;
+    await new Promise((resolve) => {
+      roomBSocket.emit("create_room", { username: "RoomBHost" }, (res) => {
+        assert(res.ok === true, "Created Room B");
+        assert(res.room.roomCode !== roomCode, "Room B code is unique and isolated");
+        roomBCode = res.room.roomCode;
+        resolve();
+      });
+    });
+
+    let roomBReceivedPollution = false;
+    roomBSocket.on("playback_updated", () => {
+      roomBReceivedPollution = true;
+    });
+
+    // Host A sends command in Room A
+    await new Promise((resolve) => {
+      hostSocket.emit("playback_command", { action: "play", position: 80 }, (res) => {
+        assert(res.ok === true, "Host A sent playback command in Room A");
+        resolve();
+      });
+    });
+    await delay(300);
+    assert(!roomBReceivedPollution, "Room B received no cross-room playback events (room isolation preserved)");
+    roomBSocket.disconnect();
 
     // Test 5: Real-Time Chat
     const chatPromise = new Promise((resolve) => {

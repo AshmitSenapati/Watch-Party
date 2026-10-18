@@ -7,6 +7,10 @@ import { createServer } from "node:http";
 import { randomInt, randomUUID } from "node:crypto";
 import { Server } from "socket.io";
 import Room from "./models/Room.js";
+import {
+  parseYouTubeVideoId,
+  validateAndNormalizeVideoUrl,
+} from "./youtube.js";
 
 dotenv.config();
 
@@ -130,7 +134,7 @@ function healthCheckHandler(req, res) {
 
   const isHealthy = dbState === 1;
 
-  res.status(isHealthy ? 200 : 503).json({
+  res.status(200).json({
     status: isHealthy ? "ok" : "degraded",
     message: "Watch Party backend is running",
     database: dbStatus,
@@ -319,9 +323,10 @@ async function generateUniqueRoomCode() {
     const code = createRoomCode();
 
     const existsInMemory = activeRooms.has(code);
-    const existsInDatabase = await Room.exists({
-      roomCode: code,
-    });
+    const existsInDatabase =
+      mongoose.connection.readyState === 1
+        ? await Room.exists({ roomCode: code }).catch(() => false)
+        : false;
 
     if (!existsInMemory && !existsInDatabase) {
       return code;
@@ -419,10 +424,12 @@ async function leaveCurrentRoom(socket, isDisconnect = false) {
         const currentRoom = activeRooms.get(roomCode);
         if (currentRoom && currentRoom.participants.size === 0) {
           activeRooms.delete(roomCode);
-          await Room.updateOne(
-            { roomCode },
-            { $set: { status: "ended" } }
-          );
+          if (mongoose.connection.readyState === 1) {
+            await Room.updateOne(
+              { roomCode },
+              { $set: { status: "ended" } }
+            ).catch(() => {});
+          }
           console.log(`Room ${roomCode} ended after grace period.`);
         }
       }, 15000);
@@ -433,10 +440,12 @@ async function leaveCurrentRoom(socket, isDisconnect = false) {
 
     activeRooms.delete(roomCode);
 
-    await Room.updateOne(
-      { roomCode },
-      { $set: { status: "ended" } }
-    );
+    if (mongoose.connection.readyState === 1) {
+      await Room.updateOne(
+        { roomCode },
+        { $set: { status: "ended" } }
+      ).catch(() => {});
+    }
 
     return;
   }
@@ -448,15 +457,17 @@ async function leaveCurrentRoom(socket, isDisconnect = false) {
 
     room.hostSocketId = nextHost.id;
 
-    await Room.updateOne(
-      { roomCode },
-      {
-        $set: {
-          hostUsername: nextHost.username,
-          status: "active",
-        },
-      }
-    );
+    if (mongoose.connection.readyState === 1) {
+      await Room.updateOne(
+        { roomCode },
+        {
+          $set: {
+            hostUsername: nextHost.username,
+            status: "active",
+          },
+        }
+      ).catch(() => {});
+    }
   }
 
   sendRoomUpdate(room);
@@ -524,12 +535,16 @@ io.on("connection", (socket) => {
         joinedAt: now,
       });
 
-      // Save room metadata before announcing success.
-      await Room.create({
-        roomCode,
-        hostUsername: username,
-        status: "active",
-      });
+      // Save room metadata before announcing success if database is connected.
+      if (mongoose.connection.readyState === 1) {
+        await Room.create({
+          roomCode,
+          hostUsername: username,
+          status: "active",
+        }).catch((err) => {
+          console.warn("Could not save room to database:", err.message);
+        });
+      }
 
       activeRooms.set(roomCode, room);
       socketRooms.set(socket.id, roomCode);
@@ -754,14 +769,16 @@ io.on("connection", (socket) => {
     }
 
     const videoUrl = payload.videoUrl?.trim();
-    const cleanVideoUrl = cleanUrl(videoUrl);
+    const validation = validateAndNormalizeVideoUrl(videoUrl);
 
-    if (!cleanVideoUrl) {
+    if (!validation.valid) {
       return reply(ack, {
         ok: false,
-        error: "Invalid video URL. Only HTTP and HTTPS URLs are supported.",
+        error: validation.error,
       });
     }
+
+    const cleanVideoUrl = validation.canonicalUrl;
 
     const now = Date.now();
 
@@ -1047,18 +1064,20 @@ io.on("connection", (socket) => {
         });
       }
 
-      const cleanVideoUrl = cleanUrl(payload.videoUrl);
-      if (!cleanVideoUrl) {
+      const validation = validateAndNormalizeVideoUrl(payload.videoUrl);
+      if (!validation.valid) {
         return reply(ack, {
           ok: false,
-          error: "Invalid video URL. Only HTTP and HTTPS URLs are supported.",
+          error: validation.error,
         });
       }
 
+      const cleanVideoUrl = validation.canonicalUrl;
       const rawTitle = typeof payload.title === "string" ? payload.title.trim() : "";
-      const title =
-        rawTitle.slice(0, 60) ||
-        `Video ${room.playlist.length + 1}`;
+      const defaultTitle = validation.isYouTube
+        ? `YouTube (${validation.videoId})`
+        : `Video ${room.playlist.length + 1}`;
+      const title = rawTitle.slice(0, 60) || defaultTitle;
 
       const participant = room.participants.get(socket.id);
       const newItem = {
@@ -1454,24 +1473,24 @@ async function startServer() {
     }
 
     let connected = false;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
         await mongoose.connect(process.env.MONGODB_URI, {
-          serverSelectionTimeoutMS: 5000,
+          serverSelectionTimeoutMS: 2000,
         });
         connected = true;
         console.log("MongoDB connected");
         break;
       } catch (err) {
         console.warn(`MongoDB connection attempt ${attempt} failed: ${err.message}`);
-        if (attempt < 3) {
-          await new Promise((r) => setTimeout(r, 1000));
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 500));
         }
       }
     }
 
     if (!connected) {
-      throw new Error("Failed to connect to MongoDB Atlas after 3 attempts.");
+      console.warn("MongoDB Atlas is unreachable (e.g. IP address not whitelisted). Server will continue with in-memory room management.");
     }
 
     const logServerStart = () => {

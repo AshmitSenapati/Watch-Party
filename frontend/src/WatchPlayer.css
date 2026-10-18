@@ -244,8 +244,121 @@
   font-size: 12px;
 }
 
+/* YouTube Player IFrame Integration */
+.yt-player-container {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  z-index: 1;
+}
+
+.yt-player-container iframe,
+.yt-player-target {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+}
+
+/* Source Selection Tabs */
+.video-url-form-container {
+  margin-bottom: 18px;
+}
+
+.source-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.source-tab-btn {
+  padding: 8px 16px;
+  background: #171622;
+  border: 1px solid #323042;
+  border-radius: 8px;
+  color: #a7a3b8;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.source-tab-btn:hover {
+  border-color: #4e4a63;
+  color: #f6f5fb;
+}
+
+.source-tab-btn.active {
+  background: #2b2342;
+  border-color: #b9a3ff;
+  color: #ffffff;
+  box-shadow: 0 0 0 1px #b9a3ff;
+}
+
+.input-validation-error {
+  margin: 8px 0 0;
+  color: #fda4af;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.video-url-hint {
+  margin: 8px 0 0;
+  color: #9997a9;
+  font-size: 12px;
+}
+
+.video-url-hint code {
+  color: #cbb8ff;
+  background: #1f1d2b;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+/* Error Card Overlay */
+.video-error-card {
+  max-width: 460px;
+  padding: 20px 24px;
+  background: rgba(23, 16, 37, 0.95);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 14px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+}
+
+.video-error-card .error-icon {
+  font-size: 28px;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.video-error-card .error-text {
+  margin: 0 0 8px;
+  color: #fca5a5;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.video-error-card .error-subtext {
+  margin: 0;
+  color: #a8a29e;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 @media (max-width: 600px) {
   .video-url-controls {
+    flex-direction: column;
+  }
+
+  .source-tabs {
     flex-direction: column;
   }
 }
