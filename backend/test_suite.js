@@ -559,6 +559,133 @@ async function runTests() {
       );
     });
 
+    // Test 14: Playback Synchronization, Video Completion (Ended), and Progress Sync Tests
+    console.log("Testing playback synchronization, video completion, replay, and heartbeats...");
+
+    // 1. Host progress heartbeat (sync_progress)
+    await new Promise((resolve) => {
+      refreshedHostSocket.emit(
+        "playback_command",
+        { action: "sync_progress", position: 45, duration: 200 },
+        (res) => {
+          assert(res.ok === true, "Host sync_progress heartbeat accepted");
+          resolve();
+        }
+      );
+    });
+
+    // 2. Unauthorized viewer sync_progress rejected
+    await new Promise((resolve) => {
+      viewerSocket.emit(
+        "playback_command",
+        { action: "sync_progress", position: 50 },
+        (res) => {
+          assert(res.ok === false, "Unauthorized viewer sync_progress rejected");
+          resolve();
+        }
+      );
+    });
+
+    // 3. Video completion event (action: 'ended')
+    const viewerEndedPromise = new Promise((resolve) => {
+      viewerSocket.once("playback_updated", (playback) => {
+        assert(playback.isEnded === true, "Viewer receives isEnded: true on video completion");
+        assert(playback.isPlaying === false, "Playback is paused on video completion");
+        assert(playback.position === 200, "Position is pinned to duration (200) on ended");
+        assert(playback.duration === 200, "Duration is preserved on ended");
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      refreshedHostSocket.emit(
+        "playback_command",
+        { action: "ended", position: 200, duration: 200 },
+        (res) => {
+          assert(res.ok === true, "Host ended playback command accepted");
+          assert(res.playback.isEnded === true, "Playback state isEnded is true");
+          assert(res.playback.isPlaying === false, "Playback state isPlaying is false");
+          assert(res.playback.position === 200, "Playback state position pinned to 200");
+          resolve();
+        }
+      );
+    });
+    await viewerEndedPromise;
+
+    // 4. Verify playback does not auto-advance or loop while ended
+    await delay(300);
+    const endedLateJoiner = io(SERVER_URL, { reconnection: false });
+    await new Promise((resolve) => endedLateJoiner.on("connect", resolve));
+    await new Promise((resolve) => {
+      endedLateJoiner.emit("join_room", { username: "EndedViewer", roomCode }, (res) => {
+        assert(res.ok === true, "Late joiner joined ended room");
+        assert(res.room.playback.isEnded === true, "Late joiner snapshot has isEnded: true");
+        assert(res.room.playback.isPlaying === false, "Late joiner snapshot has isPlaying: false");
+        assert(res.room.playback.position === 200, "Late joiner snapshot position frozen at 200 (not 0 or advanced)");
+        resolve();
+      });
+    });
+    endedLateJoiner.disconnect();
+
+    // 5. Host seeking away from end clears isEnded
+    const viewerSeekFromEndPromise = new Promise((resolve) => {
+      viewerSocket.once("playback_updated", (playback) => {
+        assert(playback.isEnded === false, "Viewer receives isEnded: false when host seeks away from end");
+        assert(playback.position === 50, "Viewer receives seek position 50");
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      refreshedHostSocket.emit(
+        "playback_command",
+        { action: "seek", position: 50 },
+        (res) => {
+          assert(res.ok === true, "Host seek away from end accepted");
+          assert(res.playback.isEnded === false, "isEnded reset to false on seek away from end");
+          assert(res.playback.position === 50, "Playback position updated to 50");
+          resolve();
+        }
+      );
+    });
+    await viewerSeekFromEndPromise;
+
+    // 6. Put back into ended state, then test intentional Replay
+    await new Promise((resolve) => {
+      refreshedHostSocket.emit(
+        "playback_command",
+        { action: "ended", position: 200, duration: 200 },
+        (res) => {
+          assert(res.ok === true, "Host marks video ended again");
+          resolve();
+        }
+      );
+    });
+
+    const viewerReplayPromise = new Promise((resolve) => {
+      viewerSocket.once("playback_updated", (playback) => {
+        assert(playback.isEnded === false, "Viewer receives isEnded: false on replay");
+        assert(playback.isPlaying === true, "Viewer receives isPlaying: true on replay");
+        assert(playback.position === 0, "Viewer receives position reset to 0 on replay");
+        resolve();
+      });
+    });
+
+    await new Promise((resolve) => {
+      refreshedHostSocket.emit(
+        "playback_command",
+        { action: "play", position: 0 },
+        (res) => {
+          assert(res.ok === true, "Host intentional replay command accepted");
+          assert(res.playback.isEnded === false, "isEnded is false on replay");
+          assert(res.playback.isPlaying === true, "isPlaying is true on replay");
+          assert(res.playback.position === 0, "Position is reset to 0 on replay");
+          resolve();
+        }
+      );
+    });
+    await viewerReplayPromise;
+
     refreshedHostSocket.disconnect();
     reloadedSoloSocket.disconnect();
 

@@ -341,21 +341,30 @@ async function generateUniqueRoomCode() {
 // --------------------------------------------------
 
 function getExpectedPosition(playback, now = Date.now()) {
-  if (!playback.isPlaying) {
+  if (!playback.isPlaying || playback.isEnded) {
     return playback.position;
   }
 
   const elapsedSeconds =
     Math.max(0, now - playback.updatedAt) / 1000;
 
-  return playback.position + elapsedSeconds;
+  const raw = playback.position + elapsedSeconds;
+  if (typeof playback.duration === "number" && playback.duration > 0) {
+    return Math.min(raw, playback.duration);
+  }
+  return raw;
 }
 
 function getPlaybackSnapshot(playback) {
+  const isEnded = Boolean(playback.isEnded);
+  const isPlaying = Boolean(playback.isPlaying && !isEnded);
+
   return {
     videoUrl: playback.videoUrl,
     position: getExpectedPosition(playback),
-    isPlaying: playback.isPlaying,
+    isPlaying,
+    isEnded,
+    duration: typeof playback.duration === "number" ? playback.duration : 0,
     updatedAt: playback.updatedAt,
     version: playback.version,
   };
@@ -569,6 +578,8 @@ io.on("connection", (socket) => {
           videoUrl: DEFAULT_VIDEO_URL,
           position: 0,
           isPlaying: false,
+          isEnded: false,
+          duration: 0,
           updatedAt: now,
           version: 0,
         },
@@ -860,6 +871,8 @@ io.on("connection", (socket) => {
       videoUrl: cleanVideoUrl,
       position: 0,
       isPlaying: false,
+      isEnded: false,
+      duration: 0,
       updatedAt: now,
       version: room.playback.version + 1,
     };
@@ -902,21 +915,41 @@ io.on("connection", (socket) => {
         });
       }
 
-      const { action, position } = payload;
+      const { action, position, duration } = payload;
 
-      if (!["play", "pause", "seek", "ended"].includes(action)) {
+      if (!["play", "pause", "seek", "ended", "sync_progress"].includes(action)) {
         return reply(ack, {
           ok: false,
           error: "Unsupported playback action.",
         });
       }
 
+      if (typeof duration === "number" && Number.isFinite(duration) && duration > 0) {
+        room.playback.duration = duration;
+      }
+
+      // Handle periodic progress sync heartbeat from host without bumping version or broadcasting
+      if (action === "sync_progress") {
+        if (
+          typeof position === "number" &&
+          Number.isFinite(position) &&
+          position >= 0 &&
+          position <= 86400
+        ) {
+          room.playback.position = position;
+          room.playback.updatedAt = Date.now();
+        }
+        return reply(ack, { ok: true });
+      }
+
       const currentPosition = getExpectedPosition(room.playback);
       let nextPosition = currentPosition;
       let nextIsPlaying = room.playback.isPlaying;
+      let nextIsEnded = Boolean(room.playback.isEnded);
 
       if (action === "play") {
         nextIsPlaying = true;
+        nextIsEnded = false;
 
         if (
           typeof position === "number" &&
@@ -925,9 +958,19 @@ io.on("connection", (socket) => {
           position <= 86400
         ) {
           nextPosition = position;
+        } else if (room.playback.isEnded) {
+          nextPosition = 0;
         }
       } else if (action === "pause") {
         nextIsPlaying = false;
+        if (
+          typeof position === "number" &&
+          Number.isFinite(position) &&
+          position >= 0 &&
+          position <= 86400
+        ) {
+          nextPosition = position;
+        }
       } else if (action === "seek") {
         if (
           typeof position !== "number" ||
@@ -942,19 +985,32 @@ io.on("connection", (socket) => {
         }
 
         nextPosition = position;
+        if (room.playback.isEnded) {
+          const dur = room.playback.duration || 0;
+          if (dur <= 0 || position < dur - 0.5) {
+            nextIsEnded = false;
+          }
+        }
       } else if (action === "ended") {
+        const finalDuration =
+          typeof duration === "number" && duration > 0
+            ? duration
+            : room.playback.duration || 0;
+
         nextPosition =
-          typeof position === "number" && Number.isFinite(position)
-            ? Math.max(0, position)
-            : currentPosition;
+          typeof position === "number" && Number.isFinite(position) && position > 0
+            ? position
+            : finalDuration || currentPosition;
 
         nextIsPlaying = false;
+        nextIsEnded = true;
       }
 
       room.playback = {
         ...room.playback,
         position: nextPosition,
         isPlaying: nextIsPlaying,
+        isEnded: nextIsEnded,
         updatedAt: Date.now(),
         version: room.playback.version + 1,
       };
@@ -1296,6 +1352,8 @@ io.on("connection", (socket) => {
         videoUrl: item.videoUrl,
         position: 0,
         isPlaying: true,
+        isEnded: false,
+        duration: 0,
         updatedAt: now,
         version: room.playback.version + 1,
       };

@@ -362,3 +362,54 @@
     flex-direction: column;
   }
 }
+
+/* Autoplay Unblock Overlay */
+.autoplay-overlay {
+  background: rgba(10, 10, 16, 0.85);
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 10;
+}
+
+.autoplay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 24px 32px;
+  background: #171622;
+  border: 1px solid #3d3a52;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.autoplay-icon {
+  font-size: 32px;
+  color: #b9a3ff;
+}
+
+.autoplay-title {
+  margin: 0;
+  color: #f6f5fb;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.autoplay-btn {
+  margin-top: 4px;
+  padding: 10px 24px;
+  font-size: 14px;
+}
+
+/* Replay Button state */
+.player-button.replay {
+  background: #2dd4bf;
+  border-color: #2dd4bf;
+  color: #0d2824;
+}
+
+.player-button.replay:hover:not(:disabled) {
+  background: #5eead4;
+  border-color: #5eead4;
+}

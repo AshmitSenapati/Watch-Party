@@ -12,14 +12,18 @@ const DRIFT_THRESHOLD = 1.5;
 const PROGRESS_INTERVAL_MS = 100;
 
 function expectedPosition(playback) {
-  if (!playback?.isPlaying) {
+  if (!playback?.isPlaying || playback?.isEnded) {
     return playback?.position ?? 0;
   }
 
-  return (
+  const raw =
     (playback.position ?? 0) +
-    Math.max(0, Date.now() - playback.updatedAt) / 1000
-  );
+    Math.max(0, Date.now() - playback.updatedAt) / 1000;
+
+  if (typeof playback.duration === "number" && playback.duration > 0) {
+    return Math.min(raw, playback.duration);
+  }
+  return raw;
 }
 
 export default function WatchPlayer({ socket, room, isHost, onError }) {
@@ -31,7 +35,8 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
 
   const playbackRef = useRef(room.playback);
   const pendingSeekRef = useRef(null);
-  const endedVersionRef = useRef(null);
+  const lastSeekTimeRef = useRef(0);
+  const playPendingRef = useRef(false);
   const isDraggingRef = useRef(false);
   const isApplyingPlaybackRef = useRef(false);
 
@@ -44,14 +49,23 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
   const [seekDraft, setSeekDraft] = useState(
     room.playback?.position ?? 0
   );
-  const [duration, setDuration] = useState(0);
+  const [mediaDuration, setMediaDuration] = useState(0);
   const [buffering, setBuffering] = useState(false);
   const [playerError, setPlayerError] = useState("");
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
   const [currentPlayback, setCurrentPlayback] = useState(room.playback);
   const [displayPosition, setDisplayPosition] = useState(
     room.playback?.position ?? 0
   );
   const [changingVideo, setChangingVideo] = useState(false);
+
+  const duration =
+    mediaDuration > 0
+      ? mediaDuration
+      : typeof currentPlayback?.duration === "number" &&
+        currentPlayback.duration > 0
+      ? currentPlayback.duration
+      : 0;
 
   // Determine if current video is a YouTube video
   const youtubeVideoId = useMemo(
@@ -61,62 +75,107 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
   const isYouTube = Boolean(youtubeVideoId);
 
   // 1. Apply YouTube playback state
-  const applyYouTubePlayback = useCallback((state, forceSeek = false) => {
-    const yt = ytPlayerRef.current;
-    if (!yt || !isYtReadyRef.current || !state) return;
+  const applyYouTubePlayback = useCallback(
+    (state, forceSeek = false) => {
+      const yt = ytPlayerRef.current;
+      if (!yt || !isYtReadyRef.current || !state) return;
 
-    const target = Math.max(0, expectedPosition(state));
-    isApplyingPlaybackRef.current = true;
+      isApplyingPlaybackRef.current = true;
 
-    try {
-      const currentTime =
-        typeof yt.getCurrentTime === "function" ? yt.getCurrentTime() : 0;
-      const playerDuration =
-        typeof yt.getDuration === "function" ? yt.getDuration() : 0;
+      try {
+        const currentTime =
+          typeof yt.getCurrentTime === "function" ? yt.getCurrentTime() : 0;
+        const playerDuration =
+          typeof yt.getDuration === "function" ? yt.getDuration() : 0;
 
-      if (Number.isFinite(playerDuration) && playerDuration > 0) {
-        setDuration(playerDuration);
-      }
+        const effectiveDuration =
+          playerDuration > 0
+            ? playerDuration
+            : state.duration > 0
+            ? state.duration
+            : duration;
 
-      const drift = Math.abs(currentTime - target);
-      if (forceSeek || drift > DRIFT_THRESHOLD) {
-        const seekTarget =
-          playerDuration > 0 ? Math.min(target, playerDuration) : target;
-        yt.seekTo(seekTarget, true);
-        setDisplayPosition(seekTarget);
-        setSeekDraft(seekTarget);
-      }
-
-      if (state.isPlaying) {
-        const playerState =
-          typeof yt.getPlayerState === "function" ? yt.getPlayerState() : -1;
-        if (
-          window.YT &&
-          playerState !== window.YT.PlayerState.PLAYING &&
-          playerState !== window.YT.PlayerState.BUFFERING
-        ) {
-          yt.playVideo();
+        // If the video has ended: pause it and pin to duration, DO NOT seek or loop
+        if (state.isEnded) {
+          try {
+            const pState =
+              typeof yt.getPlayerState === "function"
+                ? yt.getPlayerState()
+                : -1;
+            if (
+              window.YT &&
+              pState !== window.YT.PlayerState.PAUSED &&
+              pState !== window.YT.PlayerState.ENDED
+            ) {
+              yt.pauseVideo();
+            }
+          } catch {
+            /* ignore */
+          }
+          const endPos =
+            effectiveDuration > 0 ? effectiveDuration : state.position || 0;
+          setDisplayPosition(endPos);
+          setSeekDraft(endPos);
+          setBuffering(false);
+          return;
         }
-        setPlayerError("");
-      } else {
-        const playerState =
-          typeof yt.getPlayerState === "function" ? yt.getPlayerState() : -1;
-        if (
-          window.YT &&
-          playerState !== window.YT.PlayerState.PAUSED &&
-          playerState !== window.YT.PlayerState.CUED
-        ) {
-          yt.pauseVideo();
+
+        const target = Math.max(0, expectedPosition(state));
+        const drift = Math.abs(currentTime - target);
+        const now = Date.now();
+        const canSeekDrift =
+          !isHost && now - lastSeekTimeRef.current > 3000;
+
+        if (forceSeek || (drift > DRIFT_THRESHOLD && canSeekDrift)) {
+          const seekTarget =
+            effectiveDuration > 0
+              ? Math.min(target, effectiveDuration)
+              : target;
+          yt.seekTo(seekTarget, true);
+          lastSeekTimeRef.current = now;
+          setDisplayPosition(seekTarget);
+          if (!isDraggingRef.current) {
+            setSeekDraft(seekTarget);
+          }
         }
+
+        if (state.isPlaying) {
+          const playerState =
+            typeof yt.getPlayerState === "function"
+              ? yt.getPlayerState()
+              : -1;
+          if (
+            window.YT &&
+            playerState !== window.YT.PlayerState.PLAYING &&
+            playerState !== window.YT.PlayerState.BUFFERING
+          ) {
+            yt.playVideo();
+          }
+          setPlayerError("");
+        } else {
+          const playerState =
+            typeof yt.getPlayerState === "function"
+              ? yt.getPlayerState()
+              : -1;
+          if (
+            window.YT &&
+            playerState !== window.YT.PlayerState.PAUSED &&
+            playerState !== window.YT.PlayerState.CUED &&
+            playerState !== window.YT.PlayerState.ENDED
+          ) {
+            yt.pauseVideo();
+          }
+        }
+      } catch (error) {
+        console.warn("Could not apply YouTube playback:", error);
+      } finally {
+        setTimeout(() => {
+          isApplyingPlaybackRef.current = false;
+        }, 500);
       }
-    } catch (error) {
-      console.warn("Could not apply YouTube playback:", error);
-    } finally {
-      setTimeout(() => {
-        isApplyingPlaybackRef.current = false;
-      }, 400);
-    }
-  }, []);
+    },
+    [duration, isHost]
+  );
 
   // 2. Apply playback updates to whichever player is active
   const applyPlayback = useCallback(
@@ -144,54 +203,101 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
       const video = videoRef.current;
       if (!video) return;
 
+      const effectiveDuration =
+        Number.isFinite(video.duration) && video.duration > 0
+          ? video.duration
+          : state.duration > 0
+          ? state.duration
+          : duration;
+
+      // If the video has ended: pause it and pin to duration, DO NOT seek or loop
+      if (state.isEnded) {
+        video.pause();
+        const endPos =
+          effectiveDuration > 0 ? effectiveDuration : state.position || 0;
+        setDisplayPosition(endPos);
+        setSeekDraft(endPos);
+        setBuffering(false);
+        return;
+      }
+
       const target = Math.max(0, expectedPosition(state));
+      const drift = Math.abs(video.currentTime - target);
+      const now = Date.now();
+      const canSeekDrift =
+        !isHost && now - lastSeekTimeRef.current > 3000;
 
       if (
         video.readyState >= 1 &&
-        (forceSeek || Math.abs(video.currentTime - target) > DRIFT_THRESHOLD)
+        (forceSeek || (drift > DRIFT_THRESHOLD && canSeekDrift))
       ) {
         try {
           isApplyingPlaybackRef.current = true;
           video.currentTime = Math.min(
             target,
-            Number.isFinite(video.duration) ? video.duration : target
+            effectiveDuration > 0 ? effectiveDuration : target
           );
+          lastSeekTimeRef.current = now;
         } catch (error) {
           console.warn("Could not seek video:", error);
         } finally {
-          queueMicrotask(() => {
+          setTimeout(() => {
             isApplyingPlaybackRef.current = false;
-          });
+          }, 300);
         }
       }
 
       if (state.isPlaying) {
-        video
-          .play()
-          .then(() => {
-            setPlayerError("");
-          })
-          .catch(() => {
-            setPlayerError("Playback was blocked. Press Play to retry.");
-          });
+        if (video.readyState >= 2) {
+          const playPromise = video.play();
+          if (playPromise !== undefined) {
+            playPromise
+              .then(() => {
+                setAutoplayBlocked(false);
+                setPlayerError("");
+              })
+              .catch((err) => {
+                if (err.name === "AbortError") {
+                  return; // Expected if pause immediately interrupted play
+                }
+                if (err.name === "NotAllowedError") {
+                  setAutoplayBlocked(true);
+                  return;
+                }
+                setPlayerError(
+                  "Playback error: " + (err.message || "Failed to play.")
+                );
+              });
+          }
+        } else {
+          // Media not ready yet, queue play for onCanPlay / onLoadedMetadata
+          playPendingRef.current = true;
+        }
       } else {
+        playPendingRef.current = false;
         video.pause();
       }
     },
-    [applyYouTubePlayback]
+    [applyYouTubePlayback, duration, isHost]
   );
 
   // 3. Send playback commands to the server
   const sendCommand = useCallback(
-    (action, position) => {
+    (action, position, durationParam) => {
       if (!isHost) {
         onError?.("Only the host can control playback.");
         return;
       }
 
+      const dur =
+        durationParam ||
+        duration ||
+        playbackRef.current?.duration ||
+        0;
+
       socket.timeout(5000).emit(
         "playback_command",
-        { action, position },
+        { action, position, duration: dur },
         (timeoutError, response) => {
           if (timeoutError) {
             onError?.("Playback command timed out.");
@@ -224,27 +330,41 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
             setSeekDraft(state.position ?? 0);
           }
 
-          applyPlayback(state, true);
+          applyPlayback(state, action === "seek");
         }
       );
     },
-    [isHost, socket, onError, applyPlayback]
+    [isHost, socket, onError, applyPlayback, duration]
   );
 
   // 4. Handle video ending
   const handleVideoEnded = useCallback(() => {
     setBuffering(false);
-    setDisplayPosition(duration || displayPosition || 0);
+    const endPosition =
+      duration > 0
+        ? duration
+        : displayPosition || playbackRef.current?.position || 0;
+
+    setDisplayPosition(endPosition);
+    setSeekDraft(endPosition);
 
     if (!isHost) return;
 
     const state = playbackRef.current;
-    if (!state || endedVersionRef.current === state.version) {
+    if (!state || state.isEnded) {
       return;
     }
 
-    endedVersionRef.current = state.version;
-    sendCommand("ended", duration || 0);
+    // Immediately mark local ended state to prevent auto-restart feedback loops
+    playbackRef.current = {
+      ...state,
+      isEnded: true,
+      isPlaying: false,
+      position: endPosition,
+    };
+    setCurrentPlayback(playbackRef.current);
+
+    sendCommand("ended", endPosition, duration);
   }, [isHost, duration, displayPosition, sendCommand]);
 
   // 5. Handle YouTube Player state changes
@@ -267,7 +387,7 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
       try {
         const dur = event.target.getDuration();
         if (Number.isFinite(dur) && dur > 0) {
-          setDuration(dur);
+          setMediaDuration(dur);
         }
       } catch {
         /* ignore */
@@ -278,24 +398,20 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
         return;
       }
 
-      // If viewer, keep local player aligned with authoritative room state
-      if (!isHost) {
-        const current = playbackRef.current;
-        if (current) {
-          if (current.isPlaying && ytState === YT.PlayerState.PAUSED) {
-            try {
-              event.target.playVideo();
-            } catch {
-              /* ignore */
-            }
-          } else if (!current.isPlaying && ytState === YT.PlayerState.PLAYING) {
-            try {
-              event.target.pauseVideo();
-            } catch {
-              /* ignore */
-            }
+      // If playback is ended, suppress auto-restart loop
+      if (playbackRef.current?.isEnded) {
+        if (ytState === YT.PlayerState.PLAYING) {
+          try {
+            event.target.pauseVideo();
+          } catch {
+            /* ignore */
           }
         }
+        return;
+      }
+
+      // Viewers never broadcast commands or fight the player
+      if (!isHost) {
         return;
       }
 
@@ -307,15 +423,15 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
 
       if (ytState === YT.PlayerState.PLAYING) {
         if (!current?.isPlaying) {
-          sendCommand("play", currentTime);
+          sendCommand("play", currentTime, duration);
         }
       } else if (ytState === YT.PlayerState.PAUSED) {
         if (current?.isPlaying) {
-          sendCommand("pause", currentTime);
+          sendCommand("pause", currentTime, duration);
         }
       }
     },
-    [isHost, sendCommand, handleVideoEnded]
+    [isHost, sendCommand, handleVideoEnded, duration]
   );
 
   // Initialize and update YouTube IFrame Player
@@ -400,7 +516,7 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
               try {
                 const dur = event.target.getDuration();
                 if (Number.isFinite(dur) && dur > 0) {
-                  setDuration(dur);
+                  setMediaDuration(dur);
                 }
               } catch {
                 /* ignore */
@@ -462,11 +578,12 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
     const state = room.playback;
     const previous = playbackRef.current;
 
-    if (
-      previous?.version != null &&
-      state.version != null &&
-      state.version < previous.version
-    ) {
+    const isNewer =
+      previous?.version == null ||
+      (state.version != null && state.version > previous.version);
+    const isUrlChange = state.videoUrl !== previous?.videoUrl;
+
+    if (!isNewer && !isUrlChange) {
       return;
     }
 
@@ -474,12 +591,10 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
     setCurrentPlayback(state);
 
     if (!isDraggingRef.current) {
-      setSeekDraft(
-        videoRef.current?.currentTime ?? expectedPosition(state)
-      );
+      setSeekDraft(state.position ?? 0);
     }
 
-    applyPlayback(state, true);
+    applyPlayback(state, isUrlChange);
   }, [room.playback, applyPlayback]);
 
   // Receive playback updates from the server
@@ -497,6 +612,13 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
         return;
       }
 
+      const isUrlChange = state.videoUrl !== previous?.videoUrl;
+      const isExplicitSeek =
+        !state.isEnded &&
+        !isUrlChange &&
+        previous &&
+        Math.abs(state.position - expectedPosition(previous)) > 2.0;
+
       playbackRef.current = state;
       setCurrentPlayback(state);
       pendingSeekRef.current = null;
@@ -505,7 +627,7 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
         setSeekDraft(state.position ?? 0);
       }
 
-      applyPlayback(state, true);
+      applyPlayback(state, isUrlChange || isExplicitSeek);
     }
 
     socket.on("playback_updated", onPlaybackUpdated);
@@ -515,14 +637,69 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
     };
   }, [socket, applyPlayback]);
 
-  // Unified progress tracking & drift synchronization interval
+  // Host periodic progress sync to server
+  useEffect(() => {
+    if (!isHost) return;
+
+    const intervalId = setInterval(() => {
+      const current = playbackRef.current;
+      if (!current?.isPlaying || current?.isEnded) return;
+
+      let pos = 0;
+      if (isYouTube) {
+        const yt = ytPlayerRef.current;
+        if (
+          yt &&
+          isYtReadyRef.current &&
+          typeof yt.getCurrentTime === "function"
+        ) {
+          pos = yt.getCurrentTime() || 0;
+        }
+      } else {
+        const video = videoRef.current;
+        if (video) {
+          pos = video.currentTime || 0;
+        }
+      }
+
+      if (pos > 0) {
+        socket.emit("playback_command", {
+          action: "sync_progress",
+          position: pos,
+          duration: duration || current.duration || 0,
+        });
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [isHost, isYouTube, socket, duration]);
+
+  // Unified progress tracking & smooth UI update
   useEffect(() => {
     function updateProgress() {
       if (isDraggingRef.current) return;
 
+      const current = playbackRef.current;
+
+      if (current?.isEnded) {
+        const endPos =
+          duration > 0 ? duration : current.position || 0;
+        setDisplayPosition(endPos);
+        setSeekDraft(endPos);
+        return;
+      }
+
       if (isYouTube) {
         const yt = ytPlayerRef.current;
-        if (!yt || !isYtReadyRef.current) return;
+        if (!yt || !isYtReadyRef.current) {
+          if (current?.isPlaying) {
+            const exp = expectedPosition(current);
+            const capped = duration > 0 ? Math.min(exp, duration) : exp;
+            setDisplayPosition(capped);
+            setSeekDraft(capped);
+          }
+          return;
+        }
 
         try {
           const time =
@@ -533,7 +710,7 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
             typeof yt.getDuration === "function" ? yt.getDuration() : 0;
 
           if (Number.isFinite(dur) && dur > 0) {
-            setDuration(dur);
+            setMediaDuration((prev) => (prev !== dur ? dur : prev));
           }
 
           if (Number.isFinite(time)) {
@@ -541,20 +718,27 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
             setSeekDraft(time);
           }
 
-          // Drift correction during playback
-          const current = playbackRef.current;
+          // Viewer-only drift correction with cooldown
           if (
+            !isHost &&
             current?.isPlaying &&
             !isApplyingPlaybackRef.current &&
-            Number.isFinite(time)
+            Number.isFinite(time) &&
+            !buffering
           ) {
             const target = expectedPosition(current);
-            if (Math.abs(time - target) > DRIFT_THRESHOLD) {
+            const drift = Math.abs(time - target);
+            const now = Date.now();
+            if (
+              drift > DRIFT_THRESHOLD &&
+              now - lastSeekTimeRef.current > 3500
+            ) {
               isApplyingPlaybackRef.current = true;
+              lastSeekTimeRef.current = now;
               yt.seekTo(target, true);
               setTimeout(() => {
                 isApplyingPlaybackRef.current = false;
-              }, 350);
+              }, 400);
             }
           }
         } catch {
@@ -562,7 +746,15 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
         }
       } else {
         const video = videoRef.current;
-        if (!video) return;
+        if (!video) {
+          if (current?.isPlaying) {
+            const exp = expectedPosition(current);
+            const capped = duration > 0 ? Math.min(exp, duration) : exp;
+            setDisplayPosition(capped);
+            setSeekDraft(capped);
+          }
+          return;
+        }
 
         const position = Number.isFinite(video.currentTime)
           ? video.currentTime
@@ -570,13 +762,43 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
 
         setDisplayPosition(position);
         setSeekDraft(position);
+
+        if (Number.isFinite(video.duration) && video.duration > 0) {
+          setMediaDuration((prev) =>
+            prev !== video.duration ? video.duration : prev
+          );
+        }
+
+        // Viewer-only drift correction with cooldown for HTML5
+        if (
+          !isHost &&
+          current?.isPlaying &&
+          !isApplyingPlaybackRef.current &&
+          video.readyState >= 3 &&
+          !buffering
+        ) {
+          const target = expectedPosition(current);
+          const drift = Math.abs(position - target);
+          const now = Date.now();
+          if (
+            drift > DRIFT_THRESHOLD &&
+            now - lastSeekTimeRef.current > 3500
+          ) {
+            isApplyingPlaybackRef.current = true;
+            lastSeekTimeRef.current = now;
+            video.currentTime = target;
+            setTimeout(() => {
+              isApplyingPlaybackRef.current = false;
+            }, 300);
+          }
+        }
       }
     }
 
     updateProgress();
     const intervalId = setInterval(updateProgress, PROGRESS_INTERVAL_MS);
     return () => clearInterval(intervalId);
-  }, [isYouTube]);
+  }, [isYouTube, isHost, duration, buffering]);
 
   // Load YouTube Video Form Submission
   const handleLoadYouTubeVideo = (event) => {
@@ -636,7 +858,7 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
           setCurrentPlayback(state);
           setDisplayPosition(0);
           setSeekDraft(0);
-          setDuration(0);
+          setMediaDuration(0);
           setPlayerError("");
           setBuffering(false);
           pendingSeekRef.current = null;
@@ -711,7 +933,7 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
           setCurrentPlayback(state);
           setDisplayPosition(0);
           setSeekDraft(0);
-          setDuration(0);
+          setMediaDuration(0);
           setPlayerError("");
           setBuffering(false);
           pendingSeekRef.current = null;
@@ -724,39 +946,56 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
     );
   };
 
-  function togglePlayback() {
-    const current = playbackRef.current;
-    if (!current) return;
-
-    let ended = false;
-    let currentPos = 0;
+  function handleUnblockAutoplay() {
+    setAutoplayBlocked(false);
+    setPlayerError("");
 
     if (isYouTube) {
       const yt = ytPlayerRef.current;
       if (yt && isYtReadyRef.current) {
         try {
-          currentPos = yt.getCurrentTime() || 0;
-          ended = duration > 0 && currentPos >= duration - 0.5;
+          yt.playVideo();
         } catch {
           /* ignore */
         }
       }
     } else {
       const video = videoRef.current;
-      currentPos = video?.currentTime ?? 0;
-      ended =
-        video?.ended ||
-        (duration > 0 && video && video.currentTime >= duration - 0.25);
+      if (video) {
+        video.play().catch(() => {});
+      }
+    }
+  }
+
+  function togglePlayback() {
+    const current = playbackRef.current;
+    if (!current || !isHost) return;
+
+    if (current.isEnded) {
+      // Replay intentionally from beginning
+      sendCommand("play", 0, duration);
+      return;
     }
 
-    if (ended) {
-      sendCommand("play", 0);
-      return;
+    let currentPos = 0;
+    if (isYouTube) {
+      const yt = ytPlayerRef.current;
+      if (yt && isYtReadyRef.current) {
+        try {
+          currentPos = yt.getCurrentTime() || 0;
+        } catch {
+          /* ignore */
+        }
+      }
+    } else {
+      const video = videoRef.current;
+      currentPos = video?.currentTime ?? current.position ?? 0;
     }
 
     sendCommand(
       current.isPlaying ? "pause" : "play",
-      currentPos
+      currentPos,
+      duration
     );
   }
 
@@ -783,13 +1022,20 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
     pendingSeekRef.current = null;
     isDraggingRef.current = false;
 
-    sendCommand("seek", position);
+    sendCommand("seek", position, duration);
   }
 
   function formatTime(seconds) {
     const safe = Math.max(0, Math.floor(seconds || 0));
-    const minutes = Math.floor(safe / 60);
+    const hours = Math.floor(safe / 3600);
+    const minutes = Math.floor((safe % 3600) / 60);
     const remainder = safe % 60;
+
+    if (hours > 0) {
+      return `${hours}:${String(minutes).padStart(2, "0")}:${String(
+        remainder
+      ).padStart(2, "0")}`;
+    }
 
     return `${minutes}:${String(remainder).padStart(2, "0")}`;
   }
@@ -961,18 +1207,50 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
           playsInline
           preload="auto"
           style={{ display: !isYouTube ? "block" : "none" }}
+          onClick={isHost ? togglePlayback : handleUnblockAutoplay}
           onLoadedMetadata={(event) => {
             const video = event.currentTarget;
-            setDuration(
-              Number.isFinite(video.duration) ? video.duration : 0
-            );
+            const dur = Number.isFinite(video.duration) ? video.duration : 0;
+            if (dur > 0) {
+              setMediaDuration(dur);
+            }
             applyPlayback(playbackRef.current, true);
           }}
           onDurationChange={(event) => {
             const video = event.currentTarget;
-            setDuration(
-              Number.isFinite(video.duration) ? video.duration : 0
-            );
+            const dur = Number.isFinite(video.duration) ? video.duration : 0;
+            if (dur > 0) {
+              setMediaDuration(dur);
+            }
+          }}
+          onCanPlay={() => {
+            setBuffering(false);
+            if (
+              playPendingRef.current &&
+              playbackRef.current?.isPlaying &&
+              !playbackRef.current?.isEnded
+            ) {
+              playPendingRef.current = false;
+              videoRef.current
+                ?.play()
+                .then(() => {
+                  setAutoplayBlocked(false);
+                  setPlayerError("");
+                })
+                .catch((err) => {
+                  if (err.name === "AbortError") return;
+                  if (err.name === "NotAllowedError") {
+                    setAutoplayBlocked(true);
+                    return;
+                  }
+                  setPlayerError(
+                    "Playback error: " + (err.message || "Failed to play.")
+                  );
+                });
+            }
+          }}
+          onSeeked={() => {
+            isApplyingPlaybackRef.current = false;
           }}
           onTimeUpdate={(event) => {
             if (
@@ -991,13 +1269,18 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
             setSeekDraft(position);
           }}
           onWaiting={() => setBuffering(true)}
-          onPlaying={() => setBuffering(false)}
-          onCanPlay={() => setBuffering(false)}
+          onPlaying={() => {
+            setBuffering(false);
+            setAutoplayBlocked(false);
+          }}
+          onPause={() => setBuffering(false)}
           onEnded={handleVideoEnded}
           onError={() => {
             if (!isYouTube) {
               setBuffering(false);
-              setPlayerError("The video could not be loaded.");
+              setPlayerError(
+                "The video could not be loaded or the format is unsupported."
+              );
             }
           }}
         />
@@ -1006,6 +1289,27 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
 
         {buffering && (
           <div className="video-overlay">Buffering...</div>
+        )}
+
+        {autoplayBlocked && (
+          <div
+            className="video-overlay autoplay-overlay"
+            onClick={handleUnblockAutoplay}
+          >
+            <div className="autoplay-card">
+              <span className="autoplay-icon">▶</span>
+              <p className="autoplay-title">
+                Playback is paused by your browser
+              </p>
+              <button
+                type="button"
+                className="player-button primary autoplay-btn"
+                onClick={handleUnblockAutoplay}
+              >
+                Click to Sync &amp; Watch
+              </button>
+            </div>
+          </div>
         )}
 
         {playerError && (
@@ -1030,20 +1334,34 @@ export default function WatchPlayer({ socket, room, isHost, onError }) {
       <div className="player-controls">
         <div className="playback-buttons">
           <button
-            className="player-button primary"
+            className={`player-button primary ${
+              currentPlayback?.isEnded ? "replay" : ""
+            }`}
             onClick={togglePlayback}
             disabled={!isHost}
             title={
               isHost
-                ? "Play or pause"
+                ? currentPlayback?.isEnded
+                  ? "Replay video from start"
+                  : currentPlayback?.isPlaying
+                  ? "Pause playback"
+                  : "Start playback"
                 : "Only the host can control playback"
             }
           >
-            {currentPlayback?.isPlaying ? "Pause" : "Play"}
+            {currentPlayback?.isEnded
+              ? "Replay"
+              : currentPlayback?.isPlaying
+              ? "Pause"
+              : "Play"}
           </button>
 
           <span className="playback-status">
-            {currentPlayback?.isPlaying ? "Playing" : "Paused"}
+            {currentPlayback?.isEnded
+              ? "Ended"
+              : currentPlayback?.isPlaying
+              ? "Playing"
+              : "Paused"}
           </span>
         </div>
 
